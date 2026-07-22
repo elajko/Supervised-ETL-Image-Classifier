@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Supervised ETL Image Classifier</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <h1>Supervised ETL Image Classifier</h1>
+
+  <section id="setup-section">
+    <label for="url-input">Seed URLs (one per line)</label>
+    <textarea id="url-input" rows="6" placeholder="https://example.com/gallery&#10;https://example.com/other-page"></textarea>
+
+    <div id="start-control">
+      <button id="start-btn" class="primary">Start crawling</button>
+      <div id="mode-menu" class="hidden">
+        <button data-mode="supervised">Supervised</button>
+        <button data-mode="unsupervised">Unsupervised</button>
+      </div>
+    </div>
+    <p id="setup-error" class="error hidden"></p>
+  </section>
+
+  <section id="active-section" class="hidden">
+    <div id="active-controls">
+      <button id="stop-btn" class="primary danger">Stop crawling</button>
+      <button id="switch-unsupervised-btn" class="hidden">Switch to unsupervised</button>
+    </div>
+
+    <div id="status-panel">
+      <div class="status-row"><span class="status-label">Mode</span><span id="status-mode"></span></div>
+      <div class="status-row"><span class="status-label">Status</span><span id="status-status"></span></div>
+      <div class="status-row"><span class="status-label">Pages visited</span><span id="status-pages"></span></div>
+      <div class="status-row"><span class="status-label">Images found</span><span id="status-found"></span></div>
+      <div class="status-row"><span class="status-label">Queued</span><span id="status-queued"></span></div>
+      <div class="status-row"><span class="status-label">Graded</span><span id="status-graded"></span></div>
+      <div class="status-row"><span class="status-label">Auto-filed</span><span id="status-auto"></span></div>
+      <div class="status-row"><span class="status-label">Current URL</span><span id="status-current-url"></span></div>
+      <div id="class-counts"></div>
+    </div>
+
+    <div id="grading-section" class="hidden">
+      <div id="image-frame">
+        <img id="current-image" alt="crawled image awaiting grading">
+        <p id="no-image-message">Waiting for the next image&hellip;</p>
+      </div>
+      <p id="judgement-text">Waiting for image&hellip;</p>
+      <div id="grading-buttons">
+        <button data-label="not_part">Not part of class</button>
+        <button data-label="part">Part of class</button>
+        <button data-label="textbook">Textbook example of class</button>
+      </div>
+    </div>
+
+    <p id="unsupervised-note" class="hidden">Running unsupervised &mdash; images are being auto-classified and filed with no input needed.</p>
+  </section>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
