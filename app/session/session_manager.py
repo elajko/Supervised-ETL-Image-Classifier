@@ -110,10 +110,11 @@ class SessionManager:
         labels: Optional[list[str]] = None,
         limit: Optional[int] = None,
         offset: int = 0,
+        sort: str = "newest",
     ) -> tuple[list[dict], int]:
         if await db.get_session(session_id) is None:
             raise KeyError(f"unknown session {session_id!r}")
-        rows = await db.get_images_for_session(session_id, labels, limit, offset)
+        rows = await db.get_images_for_session(session_id, labels, limit, offset, sort)
         total = await db.count_images_for_session(session_id, labels)
         return rows, total
 

@@ -2,11 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Supervised ETL Image Classifier</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div id="app">
+<div id="left-column">
   <h1>Supervised ETL Image Classifier</h1>
 
   <section id="model-section">
@@ -71,21 +73,6 @@
     <p id="unsupervised-note" class="hidden">Running unsupervised &mdash; images are being auto-classified and filed with no input needed.</p>
   </section>
 
-  <section id="grading-section" class="hidden">
-    <div id="image-frame">
-      <img id="current-image" alt="image awaiting grading">
-      <p id="no-image-message">Waiting for the next image&hellip;</p>
-    </div>
-    <p id="judgement-text">Waiting for image&hellip;</p>
-    <div id="score-slider-row">
-      <span id="score-slider-label-low">Not part of class</span>
-      <input type="range" id="score-slider" min="0" max="100" step="1" value="50">
-      <span id="score-slider-label-high">Predominantly this</span>
-      <strong id="score-slider-value">50</strong>
-    </div>
-    <button id="submit-score-btn" class="primary">Submit rating</button>
-  </section>
-
   <section id="gallery-section" class="hidden">
     <details id="gallery-details">
       <summary>Saved images (<span id="gallery-count">0</span>)</summary>
@@ -103,6 +90,12 @@
           <option value="supervised">Supervised (human)</option>
           <option value="unsupervised">Unsupervised (auto)</option>
         </select>
+        <div id="gallery-sort" role="radiogroup" aria-label="Sort order">
+          <input type="radio" id="sort-newest" name="gallery-sort" value="newest" checked>
+          <label for="sort-newest" title="Newest first"><span aria-hidden="true">&#128337;</span> Newest</label>
+          <input type="radio" id="sort-rating" name="gallery-sort" value="rating">
+          <label for="sort-rating" title="Highest rated first"><span aria-hidden="true">&#9733;</span> Rating</label>
+        </div>
       </div>
       <div id="gallery-grid"></div>
       <div id="gallery-pagination">
@@ -112,6 +105,25 @@
       </div>
     </details>
   </section>
+</div>
+
+<div id="right-pane">
+  <section id="grading-section" class="hidden">
+    <div id="image-frame">
+      <img id="current-image" alt="image awaiting grading">
+      <p id="no-image-message">Waiting for the next image&hellip;</p>
+    </div>
+    <p id="judgement-text">Waiting for image&hellip;</p>
+    <div id="score-slider-row">
+      <span id="score-slider-label-low">Not part of class</span>
+      <input type="range" id="score-slider" min="0" max="100" step="1" value="50">
+      <span id="score-slider-label-high">Predominantly this</span>
+      <strong id="score-slider-value">50</strong>
+    </div>
+    <button id="submit-score-btn" class="primary">Submit rating</button>
+  </section>
+  <p id="right-pane-placeholder">No image being graded right now.</p>
+</div>
 </div>
 <script src="app.js"></script>
 </body>

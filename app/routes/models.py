@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Response
 from app.labels import resolve_labels
 from app.models import (
     Bucket,
+    GallerySort,
     GradeResponse,
     ModelCreateRequest,
     ModelImage,
@@ -55,10 +56,11 @@ async def get_model_images(
     bucket: Optional[Bucket] = None,
     source: Optional[str] = None,
     offset: int = 0,
+    sort: GallerySort = "newest",
 ) -> ModelImagesPage:
     labels = resolve_labels(bucket, source)
     try:
-        rows, total = await session_manager.get_images(session_id, labels, GALLERY_PAGE_SIZE, offset)
+        rows, total = await session_manager.get_images(session_id, labels, GALLERY_PAGE_SIZE, offset, sort)
     except KeyError:
         raise HTTPException(status_code=404, detail="unknown model")
     items = [

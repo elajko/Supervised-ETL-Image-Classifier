@@ -35,6 +35,7 @@ const statusCurrentUrl = document.getElementById('status-current-url');
 const classCounts = document.getElementById('class-counts');
 
 const gradingSection = document.getElementById('grading-section');
+const rightPanePlaceholder = document.getElementById('right-pane-placeholder');
 const currentImage = document.getElementById('current-image');
 const noImageMessage = document.getElementById('no-image-message');
 const judgementText = document.getElementById('judgement-text');
@@ -51,6 +52,7 @@ const galleryFilterSource = document.getElementById('gallery-filter-source');
 const galleryPrevBtn = document.getElementById('gallery-prev-btn');
 const galleryNextBtn = document.getElementById('gallery-next-btn');
 const galleryPageInfo = document.getElementById('gallery-page-info');
+const gallerySortRadios = document.querySelectorAll('#gallery-sort input[name="gallery-sort"]');
 
 const GALLERY_PAGE_SIZE = 25;
 let galleryOffset = 0;
@@ -62,6 +64,12 @@ galleryFilterBucket.addEventListener('change', () => {
 galleryFilterSource.addEventListener('change', () => {
   galleryOffset = 0;
   refreshGallery();
+});
+gallerySortRadios.forEach((radio) => {
+  radio.addEventListener('change', () => {
+    galleryOffset = 0;
+    refreshGallery();
+  });
 });
 galleryPrevBtn.addEventListener('click', () => {
   galleryOffset = Math.max(0, galleryOffset - GALLERY_PAGE_SIZE);
@@ -360,11 +368,9 @@ async function setMode(newMode) {
 // auto-filed images. Show it whenever either is active.
 function updateGradingSectionVisibility() {
   const showForCrawl = running && mode === 'supervised';
-  if (showForCrawl || reviewingAuto) {
-    gradingSection.classList.remove('hidden');
-  } else {
-    gradingSection.classList.add('hidden');
-  }
+  const active = showForCrawl || reviewingAuto;
+  gradingSection.classList.toggle('hidden', !active);
+  rightPanePlaceholder.classList.toggle('hidden', active);
 }
 
 function applyModeToUI() {
@@ -633,6 +639,8 @@ async function refreshGallery() {
   const params = new URLSearchParams();
   if (galleryFilterBucket.value) params.set('bucket', galleryFilterBucket.value);
   if (galleryFilterSource.value) params.set('source', galleryFilterSource.value);
+  const sortRadio = document.querySelector('#gallery-sort input[name="gallery-sort"]:checked');
+  if (sortRadio) params.set('sort', sortRadio.value);
   params.set('offset', galleryOffset);
   const resp = await fetch(`/api/models/${encodeURIComponent(modelId)}/images?${params}`);
   if (!resp.ok || currentModelId !== modelId) return;

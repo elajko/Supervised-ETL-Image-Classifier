@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 Mode = Literal["supervised", "unsupervised"]
 Bucket = Literal["low", "medium", "high"]
+GallerySort = Literal["newest", "rating"]
 Score = float  # 0-100, validated with Field(ge=0, le=100) on request models
 
 

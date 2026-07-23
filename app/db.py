@@ -268,6 +268,7 @@ async def get_images_for_session(
     labels: Optional[list[str]] = None,
     limit: Optional[int] = None,
     offset: int = 0,
+    sort: str = "newest",
 ) -> list[dict[str, Any]]:
     """Images actually persisted to disk for this session."""
     query = (
@@ -279,7 +280,8 @@ async def get_images_for_session(
         placeholders = ", ".join("?" for _ in labels)
         query += f" AND label IN ({placeholders})"
         params.extend(labels)
-    query += " ORDER BY graded_at DESC"
+    order_clause = "score DESC, graded_at DESC" if sort == "rating" else "graded_at DESC"
+    query += f" ORDER BY {order_clause}"
     if limit is not None:
         query += " LIMIT ? OFFSET ?"
         params.extend([limit, offset])
