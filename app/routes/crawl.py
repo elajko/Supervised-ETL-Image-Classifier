@@ -3,7 +3,6 @@ from fastapi import APIRouter, HTTPException
 from app.models import (
     CrawlModeRequest,
     CrawlStartRequest,
-    CrawlStartResponse,
     CrawlStatusResponse,
     CrawlStopRequest,
 )
@@ -12,10 +11,13 @@ from app.session.session_manager import session_manager
 router = APIRouter(prefix="/api/crawl")
 
 
-@router.post("/start", response_model=CrawlStartResponse)
-async def start_crawl(req: CrawlStartRequest) -> CrawlStartResponse:
-    session_id = await session_manager.start_crawl(req.seed_urls, req.mode)
-    return CrawlStartResponse(session_id=session_id, status="crawling")
+@router.post("/start")
+async def start_crawl(req: CrawlStartRequest) -> dict:
+    try:
+        await session_manager.start_crawl(req.session_id, req.seed_urls, req.mode)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="unknown model")
+    return {"status": "crawling"}
 
 
 @router.post("/stop")

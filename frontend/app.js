@@ -1,3 +1,16 @@
+const modelSelect = document.getElementById('model-select');
+const renameModelBtn = document.getElementById('rename-model-btn');
+const newModelBtn = document.getElementById('new-model-btn');
+const newModelForm = document.getElementById('new-model-form');
+const newModelNameInput = document.getElementById('new-model-name');
+const createModelBtn = document.getElementById('create-model-btn');
+const cancelNewModelBtn = document.getElementById('cancel-new-model-btn');
+const renameModelForm = document.getElementById('rename-model-form');
+const renameModelNameInput = document.getElementById('rename-model-name');
+const confirmRenameBtn = document.getElementById('confirm-rename-btn');
+const cancelRenameBtn = document.getElementById('cancel-rename-btn');
+const modelError = document.getElementById('model-error');
+
 const setupSection = document.getElementById('setup-section');
 const activeSection = document.getElementById('active-section');
 const urlInput = document.getElementById('url-input');
@@ -25,12 +38,170 @@ const judgementText = document.getElementById('judgement-text');
 const gradingButtons = document.getElementById('grading-buttons');
 const unsupervisedNote = document.getElementById('unsupervised-note');
 
-let sessionId = null;
+const gallerySection = document.getElementById('gallery-section');
+const galleryCount = document.getElementById('gallery-count');
+const galleryGrid = document.getElementById('gallery-grid');
+
+const STORAGE_KEY = 'etl-classifier-current-model-id';
+
+let modelsById = {};
+let currentModelId = null;
 let mode = null;
 let running = false;
 let statusTimer = null;
 let nextImageAbort = null;
 let currentImageId = null;
+
+init();
+
+async function init() {
+  await refreshModelList();
+  const savedId = localStorage.getItem(STORAGE_KEY);
+  if (savedId && modelsById[savedId]) {
+    modelSelect.value = savedId;
+    await selectModel(savedId);
+  }
+}
+
+modelSelect.addEventListener('change', () => {
+  const id = modelSelect.value;
+  if (id) selectModel(id);
+});
+
+newModelBtn.addEventListener('click', () => {
+  newModelForm.classList.remove('hidden');
+  renameModelForm.classList.add('hidden');
+  newModelNameInput.value = '';
+  newModelNameInput.focus();
+});
+
+cancelNewModelBtn.addEventListener('click', () => {
+  newModelForm.classList.add('hidden');
+});
+
+createModelBtn.addEventListener('click', async () => {
+  const name = newModelNameInput.value.trim();
+  if (!name) {
+    showModelError('Enter a name for the new model.');
+    return;
+  }
+  const resp = await fetch('/api/models', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!resp.ok) {
+    showModelError('Failed to create model.');
+    return;
+  }
+  hideModelError();
+  newModelForm.classList.add('hidden');
+  await refreshModelList();
+  modelSelect.value = (await resp.json()).session_id;
+  await selectModel(modelSelect.value);
+});
+
+renameModelBtn.addEventListener('click', () => {
+  if (!currentModelId) return;
+  renameModelNameInput.value = modelsById[currentModelId].name;
+  renameModelForm.classList.remove('hidden');
+  newModelForm.classList.add('hidden');
+  renameModelNameInput.focus();
+});
+
+cancelRenameBtn.addEventListener('click', () => {
+  renameModelForm.classList.add('hidden');
+});
+
+confirmRenameBtn.addEventListener('click', async () => {
+  const name = renameModelNameInput.value.trim();
+  if (!name || !currentModelId) {
+    showModelError('Enter a name.');
+    return;
+  }
+  const resp = await fetch(`/api/models/${encodeURIComponent(currentModelId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!resp.ok) {
+    showModelError('Failed to rename model.');
+    return;
+  }
+  hideModelError();
+  renameModelForm.classList.add('hidden');
+  await refreshModelList();
+  modelSelect.value = currentModelId;
+});
+
+function showModelError(text) {
+  modelError.textContent = text;
+  modelError.classList.remove('hidden');
+}
+
+function hideModelError() {
+  modelError.classList.add('hidden');
+}
+
+async function refreshModelList() {
+  const resp = await fetch('/api/models');
+  if (!resp.ok) return;
+  const models = await resp.json();
+  modelsById = Object.fromEntries(models.map((m) => [m.session_id, m]));
+
+  const previousValue = modelSelect.value;
+  modelSelect.innerHTML = '<option value="">Select a model&hellip;</option>';
+  for (const m of models) {
+    const option = document.createElement('option');
+    option.value = m.session_id;
+    option.textContent = formatModelLabel(m);
+    modelSelect.appendChild(option);
+  }
+  if (previousValue && modelsById[previousValue]) {
+    modelSelect.value = previousValue;
+  }
+}
+
+function formatModelLabel(model) {
+  const good = model.class_counts.good || 0;
+  const great = model.class_counts.great || 0;
+  return `${model.name} (good: ${good}, great: ${great})`;
+}
+
+async function selectModel(id) {
+  stopWatching();
+  currentModelId = id;
+  localStorage.setItem(STORAGE_KEY, id);
+  renameModelBtn.classList.remove('hidden');
+  gallerySection.classList.remove('hidden');
+  currentImageId = null;
+
+  await refreshGallery();
+
+  const resp = await fetch(`/api/crawl/status?session_id=${encodeURIComponent(id)}`);
+  if (!resp.ok) return;
+  const status = await resp.json();
+  mode = status.mode;
+
+  if (status.status === 'crawling') {
+    setupSection.classList.add('hidden');
+    activeSection.classList.remove('hidden');
+    running = true;
+    applyModeToUI();
+    startStatusPolling();
+    if (mode === 'supervised') pollNextImage();
+  } else {
+    activeSection.classList.add('hidden');
+    setupSection.classList.remove('hidden');
+  }
+}
+
+function parseUrls() {
+  return urlInput.value
+    .split('\n')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
 
 startBtn.addEventListener('click', () => {
   modeMenu.classList.toggle('hidden');
@@ -47,14 +218,8 @@ gradingButtons.querySelectorAll('button[data-label]').forEach((btn) => {
   btn.addEventListener('click', () => gradeCurrentImage(btn.dataset.label));
 });
 
-function parseUrls() {
-  return urlInput.value
-    .split('\n')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-}
-
 async function startCrawl(chosenMode) {
+  if (!currentModelId) return;
   const seedUrls = parseUrls();
   if (seedUrls.length === 0) {
     setupError.textContent = 'Enter at least one URL to crawl.';
@@ -67,15 +232,13 @@ async function startCrawl(chosenMode) {
   const resp = await fetch('/api/crawl/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ seed_urls: seedUrls, mode: chosenMode }),
+    body: JSON.stringify({ session_id: currentModelId, seed_urls: seedUrls, mode: chosenMode }),
   });
   if (!resp.ok) {
     setupError.textContent = 'Failed to start crawl.';
     setupError.classList.remove('hidden');
     return;
   }
-  const data = await resp.json();
-  sessionId = data.session_id;
   mode = chosenMode;
   running = true;
 
@@ -89,32 +252,37 @@ async function startCrawl(chosenMode) {
   }
 }
 
-async function stopCrawl() {
+// Stops the frontend's local polling loops without touching the backend
+// crawl — used when switching to a different model, since the previous
+// model's crawl should keep running server-side regardless of whether
+// anyone's watching it.
+function stopWatching() {
   running = false;
   if (nextImageAbort) nextImageAbort.abort();
   if (statusTimer) clearInterval(statusTimer);
+}
 
-  if (sessionId) {
-    await fetch('/api/crawl/stop', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId }),
-    });
-  }
-
-  sessionId = null;
-  mode = null;
+async function stopCrawl() {
+  if (!currentModelId) return;
+  stopWatching();
+  await fetch('/api/crawl/stop', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: currentModelId }),
+  });
   currentImageId = null;
   activeSection.classList.add('hidden');
   setupSection.classList.remove('hidden');
+  await refreshModelList();
+  modelSelect.value = currentModelId;
 }
 
 async function setMode(newMode) {
-  if (!sessionId) return;
+  if (!currentModelId) return;
   await fetch('/api/crawl/mode', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, mode: newMode }),
+    body: JSON.stringify({ session_id: currentModelId, mode: newMode }),
   });
   mode = newMode;
   applyModeToUI();
@@ -140,8 +308,8 @@ function startStatusPolling() {
 }
 
 async function refreshStatus() {
-  if (!sessionId) return;
-  const resp = await fetch(`/api/crawl/status?session_id=${encodeURIComponent(sessionId)}`);
+  if (!currentModelId) return;
+  const resp = await fetch(`/api/crawl/status?session_id=${encodeURIComponent(currentModelId)}`);
   if (!resp.ok) return;
   const s = await resp.json();
   statusMode.textContent = s.mode;
@@ -158,28 +326,29 @@ async function refreshStatus() {
 }
 
 async function pollNextImage() {
-  if (!running || mode !== 'supervised' || !sessionId) return;
+  if (!running || mode !== 'supervised' || !currentModelId) return;
 
   currentImageId = null;
   currentImage.classList.add('hidden');
   noImageMessage.classList.remove('hidden');
-  judgementText.textContent = 'Waiting for image…';
+  setJudgementNeutral('Waiting for image…');
   setGradingButtonsEnabled(false);
 
+  const modelId = currentModelId;
   nextImageAbort = new AbortController();
   let resp;
   try {
     resp = await fetch(
-      `/api/next-image?session_id=${encodeURIComponent(sessionId)}&timeout=10`,
+      `/api/next-image?session_id=${encodeURIComponent(modelId)}&timeout=10`,
       { signal: nextImageAbort.signal }
     );
   } catch (err) {
-    if (!running) return;
+    if (!running || currentModelId !== modelId) return;
     setTimeout(pollNextImage, 1000);
     return;
   }
 
-  if (!running || mode !== 'supervised') return;
+  if (!running || mode !== 'supervised' || currentModelId !== modelId) return;
 
   if (resp.status === 204) {
     pollNextImage();
@@ -192,24 +361,49 @@ async function pollNextImage() {
 
   const data = await resp.json();
   currentImageId = data.image_id;
-  currentImage.src = `/api/image/${data.image_id}?session_id=${encodeURIComponent(sessionId)}`;
+  currentImage.src = `/api/image/${data.image_id}?session_id=${encodeURIComponent(modelId)}`;
   currentImage.classList.remove('hidden');
   noImageMessage.classList.add('hidden');
-  judgementText.textContent = describePrediction(data.prediction);
+  renderPrediction(data.prediction);
   setGradingButtonsEnabled(true);
 }
 
-function describePrediction(prediction) {
+function setJudgementNeutral(text) {
+  judgementText.className = '';
+  judgementText.textContent = text;
+}
+
+function renderPrediction(prediction) {
   if (!prediction) {
-    return 'Not enough labels yet to make a prediction — keep grading!';
+    setJudgementNeutral('Not enough labels yet to make a prediction — keep grading!');
+    return;
   }
+
+  const isPositive = prediction.label !== 'not_part';
   const pct = Math.round(prediction.probs[prediction.label] * 100);
   const labelText = {
     not_part: 'not part of the class',
-    part: 'part of the class',
-    textbook: 'a textbook example of the class',
+    good: 'part of the class',
+    great: 'a textbook example of the class',
   }[prediction.label] || prediction.label;
-  return `The model thinks this is ${labelText} (${pct}% confidence).`;
+
+  const icon = document.createElement('span');
+  icon.className = 'judgement-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = isPositive ? '✓' : '✗';
+
+  const pctEl = document.createElement('strong');
+  pctEl.textContent = `${pct}%`;
+
+  const message = document.createElement('span');
+  message.append(
+    `The model thinks this is ${labelText} (`,
+    pctEl,
+    ' confidence).'
+  );
+
+  judgementText.className = isPositive ? 'judgement-positive' : 'judgement-negative';
+  judgementText.replaceChildren(icon, message);
 }
 
 function setGradingButtonsEnabled(enabled) {
@@ -219,12 +413,51 @@ function setGradingButtonsEnabled(enabled) {
 }
 
 async function gradeCurrentImage(label) {
-  if (!currentImageId || !sessionId) return;
+  if (!currentImageId || !currentModelId) return;
   setGradingButtonsEnabled(false);
   await fetch('/api/grade', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, image_id: currentImageId, label }),
+    body: JSON.stringify({ session_id: currentModelId, image_id: currentImageId, label }),
   });
+  await refreshGallery();
+  await refreshModelList();
+  if (currentModelId) modelSelect.value = currentModelId;
   pollNextImage();
+}
+
+function galleryBadgeClass(label) {
+  if (label === 'good' || label === 'auto-good') return 'good';
+  if (label === 'great' || label === 'auto-great') return 'great';
+  if (label === 'not_part' || label === 'auto_not_part') return 'not-part';
+  return '';
+}
+
+async function refreshGallery() {
+  if (!currentModelId) return;
+  const modelId = currentModelId;
+  const resp = await fetch(`/api/models/${encodeURIComponent(modelId)}/images`);
+  if (!resp.ok || currentModelId !== modelId) return;
+  const images = await resp.json();
+  if (currentModelId !== modelId) return;
+
+  galleryCount.textContent = images.length;
+  galleryGrid.replaceChildren();
+  for (const img of images) {
+    const cell = document.createElement('div');
+    cell.className = 'gallery-cell';
+
+    const thumb = document.createElement('img');
+    thumb.src = `/api/image/${img.image_id}?session_id=${encodeURIComponent(modelId)}`;
+    thumb.alt = img.label;
+    thumb.loading = 'lazy';
+
+    const badge = document.createElement('span');
+    const badgeClass = galleryBadgeClass(img.label);
+    badge.className = badgeClass ? `gallery-badge gallery-badge-${badgeClass}` : 'gallery-badge';
+    badge.textContent = img.label;
+
+    cell.append(thumb, badge);
+    galleryGrid.appendChild(cell);
+  }
 }

@@ -30,13 +30,10 @@ async def next_image(session_id: str, timeout: float = NEXT_IMAGE_LONG_POLL_TIME
 
 
 @router.get("/image/{image_id}")
-async def get_image_bytes(image_id: str, session_id: str) -> Response:
-    try:
-        image_bytes = session_manager.get_pending_image_bytes(session_id, image_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="unknown session")
+async def get_image(image_id: str, session_id: str) -> Response:
+    image_bytes = await session_manager.get_image_bytes(session_id, image_id)
     if image_bytes is None:
-        raise HTTPException(status_code=404, detail="image not found or already graded")
+        raise HTTPException(status_code=404, detail="image not found")
     return Response(content=image_bytes, media_type=_guess_content_type(image_bytes))
 
 

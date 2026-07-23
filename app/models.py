@@ -3,17 +3,13 @@ from typing import Literal, Optional
 from pydantic import BaseModel
 
 Mode = Literal["supervised", "unsupervised"]
-Label = Literal["not_part", "part", "textbook"]
+Label = Literal["not_part", "good", "great"]
 
 
 class CrawlStartRequest(BaseModel):
+    session_id: str
     seed_urls: list[str]
     mode: Mode
-
-
-class CrawlStartResponse(BaseModel):
-    session_id: str
-    status: str
 
 
 class CrawlStopRequest(BaseModel):
@@ -57,3 +53,28 @@ class GradeResponse(BaseModel):
     status: str
     training_examples: int
     class_counts: dict[str, int]
+
+
+class ModelCreateRequest(BaseModel):
+    name: str
+
+
+class ModelRenameRequest(BaseModel):
+    name: str
+
+
+class ModelSummary(BaseModel):
+    session_id: str
+    name: str
+    created_at: str
+    updated_at: str
+    mode: str
+    status: str
+    class_counts: dict[str, int]
+
+
+class ModelImage(BaseModel):
+    image_id: str
+    label: str
+    created_at: str
+    graded_at: Optional[str]

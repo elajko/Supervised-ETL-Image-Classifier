@@ -7,8 +7,16 @@ import httpx
 import numpy as np
 from playwright.async_api import async_playwright
 
-from app.config import MAX_CONCURRENT_PAGES, MAX_DEPTH, MAX_PAGES_PER_SESSION
-from app.crawler.image_extract import content_hash, extract_image_urls, extract_link_urls, fetch_image_bytes
+from app.config import (
+    MAX_CONCURRENT_EMBEDDINGS,
+    MAX_CONCURRENT_IMAGE_FETCHES,
+    MAX_CONCURRENT_PAGES,
+    MAX_DEPTH,
+    MAX_PAGES_PER_SESSION,
+    MIN_IMAGE_HEIGHT,
+    MIN_IMAGE_WIDTH,
+)
+from app.crawler.image_extract import content_hash, extract_image_urls, extract_link_urls, fetch_image_bytes, meets_minimum_size
 from app.crawler.scope import RobotsCache, in_scope
 from app.ml.embeddings import embed_image
 
@@ -51,6 +59,8 @@ class Crawler:
         self.max_depth = max_depth
         self.max_pages = max_pages
         self.semaphore = asyncio.Semaphore(max_concurrent)
+        self.image_semaphore = asyncio.Semaphore(MAX_CONCURRENT_IMAGE_FETCHES)
+        self.embed_semaphore = asyncio.Semaphore(MAX_CONCURRENT_EMBEDDINGS)
 
         self.seed_netlocs = {urlparse(u).netloc for u in seed_urls}
         self.visited: set[str] = set()
@@ -109,17 +119,30 @@ class Crawler:
         return next_links
 
     async def _process_images(self, http_client: httpx.AsyncClient, img_srcs: list[str], source_page_url: str) -> None:
-        for src in img_srcs:
-            if self.stop_event.is_set():
-                return
-            image_bytes = await fetch_image_bytes(http_client, src)
+        await asyncio.gather(*(self._process_one_image(http_client, src, source_page_url) for src in img_srcs))
+
+    async def _process_one_image(self, http_client: httpx.AsyncClient, src: str, source_page_url: str) -> None:
+        # Isolated per image and bounded by image_semaphore: a single page can
+        # reference hundreds of <img> tags (e.g. a forum's thread-list sidebar
+        # nav, present on every page), and gather() would otherwise cancel
+        # every sibling task the moment one of them raises.
+        if self.stop_event.is_set():
+            return
+        try:
+            async with self.image_semaphore:
+                image_bytes = await fetch_image_bytes(http_client, src)
             if image_bytes is None:
-                continue
+                return
+            if not meets_minimum_size(image_bytes, MIN_IMAGE_WIDTH, MIN_IMAGE_HEIGHT):
+                return
             chash = content_hash(image_bytes)
             if await self.is_duplicate(chash):
-                continue
-            embedding = await asyncio.to_thread(embed_image, image_bytes)
+                return
+            async with self.embed_semaphore:
+                embedding = await asyncio.to_thread(embed_image, image_bytes)
             self.images_found += 1
             if self.on_progress:
                 await self.on_progress(images_found=self.images_found)
             await self.sink(CrawledImage(chash, src, source_page_url, image_bytes, embedding))
+        except Exception:
+            return

@@ -9,6 +9,7 @@ from app.db import init_db
 from app.ml.embeddings import embed_image
 from app.routes.crawl import router as crawl_router
 from app.routes.grading import router as grading_router
+from app.routes.models import router as models_router
 
 
 @asynccontextmanager
@@ -32,4 +33,5 @@ def _warmup_clip() -> None:
 app = FastAPI(lifespan=lifespan)
 app.include_router(crawl_router)
 app.include_router(grading_router)
+app.include_router(models_router)
 app.mount("/", StaticFiles(directory=str(PROJECT_ROOT / "frontend"), html=True), name="frontend")

@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
     seed_urls TEXT NOT NULL,       -- JSON array
     mode TEXT NOT NULL,            -- 'supervised' | 'unsupervised'
     status TEXT NOT NULL,          -- 'idle' | 'crawling' | 'stopped'
@@ -28,7 +29,7 @@ CREATE TABLE IF NOT EXISTS images (
     content_hash TEXT NOT NULL,
     embedding BLOB,
     embedding_model TEXT,
-    label TEXT,                    -- NULL | not_part | part | textbook | auto_not_part | auto_part | auto_textbook
+    label TEXT,                    -- NULL | not_part | good | great | auto_not_part | auto-good | auto-great
     local_path TEXT,
     graded_at TEXT,
     created_at TEXT NOT NULL
@@ -41,7 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_images_session_label
     ON images(session_id, label);
 """
 
-HUMAN_LABELS = ("not_part", "part", "textbook")
+HUMAN_LABELS = ("not_part", "good", "great")
 
 
 def _now() -> str:
@@ -53,19 +54,54 @@ async def init_db() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(SCHEMA)
         await db.commit()
+        # Migration guard: any pre-existing local data/app.db predates the
+        # `name` column. Add it and backfill from `id` so old rows stay usable.
+        async with db.execute("PRAGMA table_info(sessions)") as cur:
+            cols = [row[1] for row in await cur.fetchall()]
+        if "name" not in cols:
+            await db.execute("ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''")
+            await db.execute("UPDATE sessions SET name = id WHERE name = ''")
+            await db.commit()
 
 
-async def create_session(seed_urls: list[str], mode: str) -> str:
+async def create_session(name: str) -> str:
     session_id = str(uuid.uuid4())
     now = _now()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO sessions (id, created_at, updated_at, seed_urls, mode, status, "
-            "pages_visited, images_found, current_url) VALUES (?, ?, ?, ?, ?, 'crawling', 0, 0, NULL)",
-            (session_id, now, now, json.dumps(seed_urls), mode),
+            "INSERT INTO sessions (id, created_at, updated_at, name, seed_urls, mode, status, "
+            "pages_visited, images_found, current_url) VALUES (?, ?, ?, ?, '[]', 'supervised', 'idle', 0, 0, NULL)",
+            (session_id, now, now, name),
         )
         await db.commit()
     return session_id
+
+
+async def start_crawl_run(session_id: str, seed_urls: list[str], mode: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE sessions SET seed_urls = ?, mode = ?, status = 'crawling', "
+            "pages_visited = 0, images_found = 0, current_url = NULL, updated_at = ? WHERE id = ?",
+            (json.dumps(seed_urls), mode, _now(), session_id),
+        )
+        await db.commit()
+
+
+async def list_sessions() -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM sessions ORDER BY created_at DESC") as cur:
+            rows = await cur.fetchall()
+            return [dict(row) for row in rows]
+
+
+async def rename_session(session_id: str, name: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?",
+            (name, _now(), session_id),
+        )
+        await db.commit()
 
 
 async def get_session(session_id: str) -> Optional[dict[str, Any]]:
@@ -121,13 +157,17 @@ async def update_session_progress(
         await db.commit()
 
 
-async def image_exists_by_hash(session_id: str, content_hash: str) -> bool:
+async def get_content_hashes(session_id: str) -> list[str]:
+    """All content hashes already seen for this session — used to rebuild
+    the in-memory bloom filter + sorted-list dedup index when a model's
+    state is (re)loaded."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT 1 FROM images WHERE session_id = ? AND content_hash = ?",
-            (session_id, content_hash),
+            "SELECT content_hash FROM images WHERE session_id = ?",
+            (session_id,),
         ) as cur:
-            return await cur.fetchone() is not None
+            rows = await cur.fetchall()
+            return [row[0] for row in rows]
 
 
 async def insert_pending_image(
@@ -180,6 +220,26 @@ async def get_training_data(session_id: str) -> list[tuple[bytes, str]]:
         ) as cur:
             rows = await cur.fetchall()
             return [(row[0], row[1]) for row in rows]
+
+
+async def get_images_for_session(session_id: str, label: Optional[str] = None) -> list[dict[str, Any]]:
+    """Images actually persisted to disk for this session — excludes discarded
+    not_part/auto_not_part rows (which never got a local_path) without needing
+    a separate exclusion list."""
+    query = (
+        "SELECT id, label, image_url, local_path, created_at, graded_at FROM images "
+        "WHERE session_id = ? AND local_path IS NOT NULL"
+    )
+    params: list[Any] = [session_id]
+    if label is not None:
+        query += " AND label = ?"
+        params.append(label)
+    query += " ORDER BY graded_at DESC"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(query, params) as cur:
+            rows = await cur.fetchall()
+            return [dict(row) for row in rows]
 
 
 async def get_class_counts(session_id: str) -> dict[str, int]:

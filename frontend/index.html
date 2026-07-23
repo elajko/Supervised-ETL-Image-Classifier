@@ -9,7 +9,31 @@
 <div id="app">
   <h1>Supervised ETL Image Classifier</h1>
 
-  <section id="setup-section">
+  <section id="model-section">
+    <label for="model-select">Model</label>
+    <div id="model-picker-row">
+      <select id="model-select">
+        <option value="">Select a model&hellip;</option>
+      </select>
+      <button id="rename-model-btn" class="hidden">Rename</button>
+      <button id="new-model-btn">+ New model</button>
+    </div>
+
+    <div id="new-model-form" class="hidden">
+      <input id="new-model-name" type="text" placeholder="Model name">
+      <button id="create-model-btn" class="primary">Create</button>
+      <button id="cancel-new-model-btn">Cancel</button>
+    </div>
+
+    <div id="rename-model-form" class="hidden">
+      <input id="rename-model-name" type="text">
+      <button id="confirm-rename-btn" class="primary">Save</button>
+      <button id="cancel-rename-btn">Cancel</button>
+    </div>
+    <p id="model-error" class="error hidden"></p>
+  </section>
+
+  <section id="setup-section" class="hidden">
     <label for="url-input">Seed URLs (one per line)</label>
     <textarea id="url-input" rows="6" placeholder="https://example.com/gallery&#10;https://example.com/other-page"></textarea>
 
@@ -49,12 +73,19 @@
       <p id="judgement-text">Waiting for image&hellip;</p>
       <div id="grading-buttons">
         <button data-label="not_part">Not part of class</button>
-        <button data-label="part">Part of class</button>
-        <button data-label="textbook">Textbook example of class</button>
+        <button data-label="good">Part of class</button>
+        <button data-label="great">Textbook example of class</button>
       </div>
     </div>
 
     <p id="unsupervised-note" class="hidden">Running unsupervised &mdash; images are being auto-classified and filed with no input needed.</p>
+  </section>
+
+  <section id="gallery-section" class="hidden">
+    <details id="gallery-details">
+      <summary>Saved images (<span id="gallery-count">0</span>)</summary>
+      <div id="gallery-grid"></div>
+    </details>
   </section>
 </div>
 <script src="app.js"></script>
