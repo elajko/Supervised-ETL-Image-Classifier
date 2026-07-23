@@ -1,44 +1,52 @@
 from typing import Optional
 
-BASE_LABELS = ("not_part", "good", "great")
+from app.config import BUCKET_LABELS, SCORE_BUCKET_THRESHOLDS
+
 SOURCES = ("supervised", "unsupervised")
 
 
-def to_auto_label(base_label: Optional[str]) -> str:
-    """Maps a classifier prediction to its auto-filed label/folder name. No
-    prediction (a cold, untrained classifier) is treated as not_part. not_part
-    keeps its existing underscore form; good/great use a hyphen (historical
-    naming, kept for compatibility with already-persisted data)."""
-    if base_label is None or base_label == "not_part":
-        return "auto_not_part"
-    return f"auto-{base_label}"
+def score_to_bucket(score: float) -> str:
+    """Maps a continuous 0-100 score to its coarse folder/gallery bucket."""
+    low, high = SCORE_BUCKET_THRESHOLDS
+    if score < low:
+        return "low"
+    if score < high:
+        return "medium"
+    return "high"
 
 
-def label_for(classification: str, source: str) -> str:
-    """The underlying stored label string for a given (classification,
-    source) pair, e.g. ('good', 'unsupervised') -> 'auto-good'."""
-    return classification if source == "supervised" else to_auto_label(classification)
+def to_auto_bucket(bucket: Optional[str]) -> str:
+    """Maps a bucket to its auto-filed label/folder name. No prediction (a
+    cold, untrained regressor) is treated as low. All three buckets use a
+    uniform hyphen prefix -- unlike the old not_part/good/great scheme,
+    there's no legacy inconsistency to preserve for this brand-new
+    vocabulary."""
+    return f"auto-{bucket or 'low'}"
 
 
-def base_classification(label: str) -> str:
-    """Strips the auto-filed prefix, if any, returning the base
-    classification (not_part/good/great) -- e.g. 'auto-good' -> 'good'."""
-    if label == "auto_not_part":
-        return "not_part"
+def label_for(bucket: str, source: str) -> str:
+    """The underlying stored label string for a given (bucket, source)
+    pair, e.g. ('good' -> 'high', 'unsupervised') -> 'auto-high'."""
+    return bucket if source == "supervised" else to_auto_bucket(bucket)
+
+
+def base_bucket(label: str) -> str:
+    """Strips the auto-filed prefix, if any, returning the base bucket
+    (low/medium/high) -- e.g. 'auto-high' -> 'high'."""
     if label.startswith("auto-"):
         return label[len("auto-"):]
     return label
 
 
-AUTO_LABELS = tuple(to_auto_label(b) for b in BASE_LABELS)
+AUTO_BUCKETS = tuple(to_auto_bucket(b) for b in BUCKET_LABELS)
 
 
-def resolve_labels(classification: Optional[str], source: Optional[str]) -> Optional[list[str]]:
+def resolve_labels(bucket: Optional[str], source: Optional[str]) -> Optional[list[str]]:
     """Underlying label strings matching a gallery filter. Either axis may be
     None to mean "all" for that axis. Returns None (no filtering) only when
     both axes are unfiltered."""
-    if classification is None and source is None:
+    if bucket is None and source is None:
         return None
-    classifications = [classification] if classification else BASE_LABELS
+    buckets = [bucket] if bucket else BUCKET_LABELS
     sources = [source] if source else SOURCES
-    return [label_for(c, s) for c in classifications for s in sources]
+    return [label_for(b, s) for b in buckets for s in sources]

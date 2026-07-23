@@ -8,17 +8,17 @@ from app import db
 from app.config import EMBEDDING_MODEL_ID, NEXT_IMAGE_LONG_POLL_TIMEOUT, PENDING_QUEUE_MAXSIZE
 from app.crawler.crawler import CrawledImage, Crawler
 from app.crawler.dedup import ContentHashIndex
-from app.labels import AUTO_LABELS, base_classification, to_auto_label
-from app.ml.classifier import ClassifierHead
+from app.labels import AUTO_BUCKETS, base_bucket, score_to_bucket, to_auto_bucket
 from app.ml.embeddings import deserialize_embedding, serialize_embedding
-from app.storage.image_store import move_graded_image, persist_graded_image, should_persist
+from app.ml.regressor import ScoreRegressor
+from app.storage.image_store import move_graded_image, persist_graded_image
 from app.storage.paths import model_path
 
 
 class SessionState:
     def __init__(self, mode: str) -> None:
         self.mode = mode
-        self.classifier = ClassifierHead()
+        self.regressor = ScoreRegressor()
         # Populated in _get_or_create_state, which knows this session's
         # already-seen content hashes; empty here since building it needs a
         # DB round trip.
@@ -30,13 +30,13 @@ class SessionState:
 
 
 class SessionManager:
-    """Owns all in-memory per-model state (pending-grade queue, classifier
-    head, running crawl task). A "model" is a `sessions` DB row: a durable
+    """Owns all in-memory per-model state (pending-grade queue, regressor,
+    running crawl task). A "model" is a `sessions` DB row: a durable
     identity (id + name) that can be crawled into across multiple runs over
     time. In-memory state is created lazily on first access and, if missing,
-    resumes a previously-trained classifier head from disk — this is what
-    lets a model survive a server restart or simply not having been touched
-    yet this process lifetime."""
+    resumes a previously-trained regressor from disk — this is what lets a
+    model survive a server restart or simply not having been touched yet
+    this process lifetime."""
 
     def __init__(self) -> None:
         self._sessions: dict[str, SessionState] = {}
@@ -55,7 +55,7 @@ class SessionManager:
         if row is None:
             raise KeyError(f"unknown session {session_id!r}")
         state = SessionState(row["mode"])
-        state.classifier.load(model_path(session_id))
+        state.regressor.load(model_path(session_id))
         existing_hashes = await db.get_content_hashes(session_id)
         state.dedup_index = ContentHashIndex(existing_hashes)
         self._sessions[session_id] = state
@@ -78,7 +78,7 @@ class SessionManager:
 
     @staticmethod
     async def _row_to_summary(row: dict) -> dict:
-        class_counts = await db.get_class_counts(row["id"])
+        bucket_counts = await db.get_bucket_counts(row["id"])
         return {
             "session_id": row["id"],
             "name": row["name"],
@@ -86,7 +86,7 @@ class SessionManager:
             "updated_at": row["updated_at"],
             "mode": row["mode"],
             "status": row["status"],
-            "class_counts": class_counts,
+            "bucket_counts": bucket_counts,
         }
 
     async def get_model(self, session_id: str) -> dict:
@@ -104,27 +104,37 @@ class SessionManager:
             raise KeyError(f"unknown session {session_id!r}")
         await db.rename_session(session_id, name)
 
-    async def get_images(self, session_id: str, labels: Optional[list[str]] = None) -> list[dict]:
+    async def get_images(
+        self,
+        session_id: str,
+        labels: Optional[list[str]] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
         if await db.get_session(session_id) is None:
             raise KeyError(f"unknown session {session_id!r}")
-        return await db.get_images_for_session(session_id, labels)
+        rows = await db.get_images_for_session(session_id, labels, limit, offset)
+        total = await db.count_images_for_session(session_id, labels)
+        return rows, total
 
-    async def test_classifier(self, session_id: str) -> list[dict]:
-        """Evaluates the current classifier against every human-graded image
+    async def test_regressor(self, session_id: str) -> list[dict]:
+        """Evaluates the current regressor against every human-graded image
         for this model -- no re-embedding needed, embeddings are already
-        stored, so this is just a similarity comparison per image."""
+        stored, so this is just a forward pass per image."""
         state = await self._get_or_create_state(session_id)
         rows = await db.get_human_graded_images(session_id)
         results = []
         for row in rows:
             embedding = deserialize_embedding(row["embedding"])
-            predicted = state.classifier.predict_label(embedding)
+            predicted = state.regressor.predict_score(embedding)
+            actual = row["score"]
             results.append(
                 {
                     "image_id": row["id"],
                     "predicted": predicted,
-                    "actual": row["label"],
-                    "correct": predicted == row["label"],
+                    "actual": actual,
+                    "error": abs(predicted - actual) if predicted is not None else None,
+                    "bucket_agree": predicted is not None and score_to_bucket(predicted) == score_to_bucket(actual),
                 }
             )
         return results
@@ -178,12 +188,11 @@ class SessionManager:
                 state.pending_bytes[image_id] = crawled.image_bytes
                 await state.pending_queue.put(image_id)
             else:
-                predicted = state.classifier.predict_label(crawled.embedding)
-                label = to_auto_label(predicted)
-                local_path = None
-                if should_persist(label):
-                    local_path = persist_graded_image(session_id, crawled.content_hash, crawled.image_bytes, label)
-                await db.set_image_label(image_id, label, local_path)
+                predicted = state.regressor.predict_score(crawled.embedding)
+                score = predicted if predicted is not None else 0.0
+                label = to_auto_bucket(score_to_bucket(score))
+                local_path = persist_graded_image(session_id, crawled.content_hash, crawled.image_bytes, label)
+                await db.set_image_grade(image_id, label, score, local_path)
 
         return sink
 
@@ -200,9 +209,9 @@ class SessionManager:
     async def get_status(self, session_id: str) -> dict:
         state = await self._get_or_create_state(session_id)
         session_row = await db.get_session(session_id)
-        class_counts = await db.get_class_counts(session_id)
-        images_graded = sum(v for k, v in class_counts.items() if k in db.HUMAN_LABELS)
-        images_auto_filed = sum(class_counts.values()) - images_graded
+        bucket_counts = await db.get_bucket_counts(session_id)
+        images_graded = sum(v for k, v in bucket_counts.items() if k in db.HUMAN_BUCKETS)
+        images_auto_filed = sum(bucket_counts.values()) - images_graded
         return {
             "status": session_row["status"],
             "mode": state.mode,
@@ -212,7 +221,7 @@ class SessionManager:
             "images_graded": images_graded,
             "images_auto_filed": images_auto_filed,
             "current_url": session_row["current_url"],
-            "class_counts": class_counts,
+            "bucket_counts": bucket_counts,
         }
 
     async def get_next_image(self, session_id: str, timeout: float = NEXT_IMAGE_LONG_POLL_TIMEOUT) -> Optional[dict]:
@@ -224,12 +233,10 @@ class SessionManager:
 
         row = await db.get_image(image_id)
         embedding = deserialize_embedding(row["embedding"])
-        # predict_label(), NOT max(predict_proba()) -- the two can disagree
-        # for the hierarchical classifier (see ClassifierHead.predict_label).
-        label = state.classifier.predict_label(embedding)
+        predicted = state.regressor.predict_score(embedding)
         prediction = None
-        if label is not None:
-            prediction = {"label": label, "probs": state.classifier.predict_proba(embedding)}
+        if predicted is not None:
+            prediction = {"score": predicted, "bucket": score_to_bucket(predicted)}
         return {"image_id": image_id, "prediction": prediction}
 
     async def get_image_bytes(self, session_id: str, image_id: str) -> Optional[bytes]:
@@ -248,50 +255,52 @@ class SessionManager:
         path = Path(row["local_path"])
         return path.read_bytes() if path.exists() else None
 
-    async def grade_image(self, session_id: str, image_id: str, label: str) -> dict:
+    async def grade_image(self, session_id: str, image_id: str, score: float) -> dict:
         state = self._state(session_id)
         row = await db.get_image(image_id)
         image_bytes = state.pending_bytes.pop(image_id, None)
 
+        bucket = score_to_bucket(score)
         local_path = None
-        if should_persist(label) and image_bytes is not None:
-            local_path = persist_graded_image(session_id, row["content_hash"], image_bytes, label)
-        await db.set_image_label(image_id, label, local_path)
+        if image_bytes is not None:
+            local_path = persist_graded_image(session_id, row["content_hash"], image_bytes, bucket)
+        await db.set_image_grade(image_id, bucket, score, local_path)
 
         return await self._retrain_and_summarize(session_id, state)
 
     async def get_next_auto_image(self, session_id: str) -> Optional[dict]:
         if await db.get_session(session_id) is None:
             raise KeyError(f"unknown session {session_id!r}")
-        row = await db.get_next_unreviewed_auto_image(session_id, AUTO_LABELS)
+        row = await db.get_next_unreviewed_auto_image(session_id, AUTO_BUCKETS)
         if row is None:
             return None
-        return {"image_id": row["id"], "classification": base_classification(row["label"])}
+        return {"image_id": row["id"], "score": row["score"], "bucket": base_bucket(row["label"])}
 
-    async def promote_auto_image(self, session_id: str, image_id: str, label: str) -> dict:
-        """Confirms or corrects an auto-filed image's classification, moving
-        it from its auto-* folder into the human-graded one and making it
-        count as verified ground truth for future training/testing."""
+    async def promote_auto_image(self, session_id: str, image_id: str, score: float) -> dict:
+        """Confirms or corrects an auto-filed image's score, moving it from
+        its auto-* folder into the human-graded one and making it count as
+        verified ground truth for future training/testing."""
         state = await self._get_or_create_state(session_id)
         row = await db.get_image(image_id)
         if row is None or row["session_id"] != session_id:
             raise KeyError(f"unknown image {image_id!r}")
 
+        bucket = score_to_bucket(score)
         old_path = Path(row["local_path"]) if row["local_path"] else None
-        new_path = move_graded_image(session_id, row["content_hash"], old_path, label)
-        await db.set_image_label(image_id, label, new_path)
+        new_path = move_graded_image(session_id, row["content_hash"], old_path, bucket)
+        await db.set_image_grade(image_id, bucket, score, new_path)
 
         return await self._retrain_and_summarize(session_id, state)
 
     async def _retrain_and_summarize(self, session_id: str, state: SessionState) -> dict:
         training_data = await db.get_training_data(session_id)
         X = np.stack([deserialize_embedding(emb) for emb, _ in training_data])
-        y = [lbl for _, lbl in training_data]
-        state.classifier.fit(X, y)
-        state.classifier.save(model_path(session_id))
+        y = [score for _, score in training_data]
+        state.regressor.fit(X, y)
+        state.regressor.save(model_path(session_id))
 
-        class_counts = await db.get_class_counts(session_id)
-        return {"status": "ok", "training_examples": len(training_data), "class_counts": class_counts}
+        bucket_counts = await db.get_bucket_counts(session_id)
+        return {"status": "ok", "training_examples": len(training_data), "bucket_counts": bucket_counts}
 
 
 session_manager = SessionManager()

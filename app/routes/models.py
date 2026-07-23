@@ -1,17 +1,19 @@
-from typing import Literal, Optional
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Response
 
 from app.labels import resolve_labels
 from app.models import (
-    ClassifierTestResult,
+    Bucket,
     GradeResponse,
     ModelCreateRequest,
     ModelImage,
+    ModelImagesPage,
     ModelRenameRequest,
     ModelSummary,
     NextAutoImageResponse,
     PromoteImageRequest,
+    RegressorTestResult,
 )
 from app.session.session_manager import session_manager
 
@@ -44,30 +46,41 @@ async def rename_model(session_id: str, req: ModelRenameRequest) -> dict:
     return {"status": "ok"}
 
 
-@router.get("/{session_id}/images", response_model=list[ModelImage])
+GALLERY_PAGE_SIZE = 25
+
+
+@router.get("/{session_id}/images", response_model=ModelImagesPage)
 async def get_model_images(
     session_id: str,
-    classification: Optional[Literal["not_part", "good", "great"]] = None,
-    source: Optional[Literal["supervised", "unsupervised"]] = None,
-) -> list[ModelImage]:
-    labels = resolve_labels(classification, source)
+    bucket: Optional[Bucket] = None,
+    source: Optional[str] = None,
+    offset: int = 0,
+) -> ModelImagesPage:
+    labels = resolve_labels(bucket, source)
     try:
-        rows = await session_manager.get_images(session_id, labels)
+        rows, total = await session_manager.get_images(session_id, labels, GALLERY_PAGE_SIZE, offset)
     except KeyError:
         raise HTTPException(status_code=404, detail="unknown model")
-    return [
-        ModelImage(image_id=row["id"], label=row["label"], created_at=row["created_at"], graded_at=row["graded_at"])
+    items = [
+        ModelImage(
+            image_id=row["id"],
+            label=row["label"],
+            score=row["score"],
+            created_at=row["created_at"],
+            graded_at=row["graded_at"],
+        )
         for row in rows
     ]
+    return ModelImagesPage(items=items, total=total)
 
 
-@router.get("/{session_id}/test-classifier", response_model=list[ClassifierTestResult])
-async def test_classifier(session_id: str) -> list[ClassifierTestResult]:
+@router.get("/{session_id}/test-regressor", response_model=list[RegressorTestResult])
+async def test_regressor(session_id: str) -> list[RegressorTestResult]:
     try:
-        results = await session_manager.test_classifier(session_id)
+        results = await session_manager.test_regressor(session_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="unknown model")
-    return [ClassifierTestResult(**r) for r in results]
+    return [RegressorTestResult(**r) for r in results]
 
 
 @router.get("/{session_id}/next-auto-image", response_model=None)
@@ -84,7 +97,7 @@ async def next_auto_image(session_id: str):
 @router.post("/{session_id}/promote-image", response_model=GradeResponse)
 async def promote_image(session_id: str, req: PromoteImageRequest) -> GradeResponse:
     try:
-        result = await session_manager.promote_auto_image(session_id, req.image_id, req.label)
+        result = await session_manager.promote_auto_image(session_id, req.image_id, req.score)
     except KeyError:
         raise HTTPException(status_code=404, detail="unknown model or image")
     return GradeResponse(**result)

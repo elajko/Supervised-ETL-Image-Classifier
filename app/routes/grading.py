@@ -40,7 +40,7 @@ async def get_image(image_id: str, session_id: str) -> Response:
 @router.post("/grade", response_model=GradeResponse)
 async def grade(req: GradeRequest) -> GradeResponse:
     try:
-        result = await session_manager.grade_image(req.session_id, req.image_id, req.label)
+        result = await session_manager.grade_image(req.session_id, req.image_id, req.score)
     except KeyError:
         raise HTTPException(status_code=404, detail="unknown session")
     return GradeResponse(**result)

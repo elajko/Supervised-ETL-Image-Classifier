@@ -1,9 +1,10 @@
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 Mode = Literal["supervised", "unsupervised"]
-Label = Literal["not_part", "good", "great"]
+Bucket = Literal["low", "medium", "high"]
+Score = float  # 0-100, validated with Field(ge=0, le=100) on request models
 
 
 class CrawlStartRequest(BaseModel):
@@ -30,12 +31,12 @@ class CrawlStatusResponse(BaseModel):
     images_graded: int
     images_auto_filed: int
     current_url: Optional[str]
-    class_counts: dict[str, int]
+    bucket_counts: dict[str, int]
 
 
 class Prediction(BaseModel):
-    label: str
-    probs: dict[str, float]
+    score: float
+    bucket: str
 
 
 class NextImageResponse(BaseModel):
@@ -46,13 +47,13 @@ class NextImageResponse(BaseModel):
 class GradeRequest(BaseModel):
     session_id: str
     image_id: str
-    label: Label
+    score: Score = Field(ge=0, le=100)
 
 
 class GradeResponse(BaseModel):
     status: str
     training_examples: int
-    class_counts: dict[str, int]
+    bucket_counts: dict[str, int]
 
 
 class ModelCreateRequest(BaseModel):
@@ -70,28 +71,36 @@ class ModelSummary(BaseModel):
     updated_at: str
     mode: str
     status: str
-    class_counts: dict[str, int]
+    bucket_counts: dict[str, int]
 
 
 class ModelImage(BaseModel):
     image_id: str
     label: str
+    score: Optional[float]
     created_at: str
     graded_at: Optional[str]
 
 
-class ClassifierTestResult(BaseModel):
+class ModelImagesPage(BaseModel):
+    items: list[ModelImage]
+    total: int
+
+
+class RegressorTestResult(BaseModel):
     image_id: str
-    predicted: Optional[str]
-    actual: str
-    correct: bool
+    predicted: Optional[float]
+    actual: float
+    error: Optional[float]
+    bucket_agree: bool
 
 
 class NextAutoImageResponse(BaseModel):
     image_id: str
-    classification: str
+    score: float
+    bucket: str
 
 
 class PromoteImageRequest(BaseModel):
     image_id: str
-    label: Label
+    score: Score = Field(ge=0, le=100)

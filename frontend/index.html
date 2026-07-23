@@ -43,8 +43,8 @@
         <button data-mode="supervised">Supervised</button>
         <button data-mode="unsupervised">Unsupervised</button>
       </div>
-      <button id="test-classifier-btn">Test classifier on manually classified images</button>
-      <span id="test-classifier-status" class="hidden"></span>
+      <button id="test-regressor-btn">Test classifier on manually classified images</button>
+      <span id="test-regressor-status" class="hidden"></span>
       <button id="review-auto-btn">Supervise result of unsupervised images</button>
     </div>
     <p id="setup-error" class="error hidden"></p>
@@ -77,23 +77,25 @@
       <p id="no-image-message">Waiting for the next image&hellip;</p>
     </div>
     <p id="judgement-text">Waiting for image&hellip;</p>
-    <div id="grading-buttons">
-      <button data-label="not_part">Not part of class</button>
-      <button data-label="good">Part of class</button>
-      <button data-label="great">Textbook example of class</button>
+    <div id="score-slider-row">
+      <span id="score-slider-label-low">Not part of class</span>
+      <input type="range" id="score-slider" min="0" max="100" step="1" value="50">
+      <span id="score-slider-label-high">Predominantly this</span>
+      <strong id="score-slider-value">50</strong>
     </div>
+    <button id="submit-score-btn" class="primary">Submit rating</button>
   </section>
 
   <section id="gallery-section" class="hidden">
     <details id="gallery-details">
       <summary>Saved images (<span id="gallery-count">0</span>)</summary>
       <div id="gallery-filters">
-        <label for="gallery-filter-classification">Classification</label>
-        <select id="gallery-filter-classification">
+        <label for="gallery-filter-bucket">Score</label>
+        <select id="gallery-filter-bucket">
           <option value="">All</option>
-          <option value="not_part">Not part of class</option>
-          <option value="good">Good</option>
-          <option value="great">Great</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
         </select>
         <label for="gallery-filter-source">Graded by</label>
         <select id="gallery-filter-source">
@@ -103,6 +105,11 @@
         </select>
       </div>
       <div id="gallery-grid"></div>
+      <div id="gallery-pagination">
+        <button id="gallery-prev-btn">&larr; Prev</button>
+        <span id="gallery-page-info"></span>
+        <button id="gallery-next-btn">Next &rarr;</button>
+      </div>
     </details>
   </section>
 </div>

@@ -20,8 +20,8 @@ const startBtn = document.getElementById('start-btn');
 const modeMenu = document.getElementById('mode-menu');
 const stopBtn = document.getElementById('stop-btn');
 const switchUnsupervisedBtn = document.getElementById('switch-unsupervised-btn');
-const testClassifierBtn = document.getElementById('test-classifier-btn');
-const testClassifierStatus = document.getElementById('test-classifier-status');
+const testRegressorBtn = document.getElementById('test-regressor-btn');
+const testRegressorStatus = document.getElementById('test-regressor-status');
 const reviewAutoBtn = document.getElementById('review-auto-btn');
 
 const statusMode = document.getElementById('status-mode');
@@ -38,17 +38,39 @@ const gradingSection = document.getElementById('grading-section');
 const currentImage = document.getElementById('current-image');
 const noImageMessage = document.getElementById('no-image-message');
 const judgementText = document.getElementById('judgement-text');
-const gradingButtons = document.getElementById('grading-buttons');
+const scoreSlider = document.getElementById('score-slider');
+const scoreSliderValue = document.getElementById('score-slider-value');
+const submitScoreBtn = document.getElementById('submit-score-btn');
 const unsupervisedNote = document.getElementById('unsupervised-note');
 
 const gallerySection = document.getElementById('gallery-section');
 const galleryCount = document.getElementById('gallery-count');
 const galleryGrid = document.getElementById('gallery-grid');
-const galleryFilterClassification = document.getElementById('gallery-filter-classification');
+const galleryFilterBucket = document.getElementById('gallery-filter-bucket');
 const galleryFilterSource = document.getElementById('gallery-filter-source');
+const galleryPrevBtn = document.getElementById('gallery-prev-btn');
+const galleryNextBtn = document.getElementById('gallery-next-btn');
+const galleryPageInfo = document.getElementById('gallery-page-info');
 
-galleryFilterClassification.addEventListener('change', refreshGallery);
-galleryFilterSource.addEventListener('change', refreshGallery);
+const GALLERY_PAGE_SIZE = 25;
+let galleryOffset = 0;
+
+galleryFilterBucket.addEventListener('change', () => {
+  galleryOffset = 0;
+  refreshGallery();
+});
+galleryFilterSource.addEventListener('change', () => {
+  galleryOffset = 0;
+  refreshGallery();
+});
+galleryPrevBtn.addEventListener('click', () => {
+  galleryOffset = Math.max(0, galleryOffset - GALLERY_PAGE_SIZE);
+  refreshGallery();
+});
+galleryNextBtn.addEventListener('click', () => {
+  galleryOffset += GALLERY_PAGE_SIZE;
+  refreshGallery();
+});
 
 const STORAGE_KEY = 'etl-classifier-current-model-id';
 
@@ -179,9 +201,9 @@ async function refreshModelList() {
 }
 
 function formatModelLabel(model) {
-  const good = model.class_counts.good || 0;
-  const great = model.class_counts.great || 0;
-  return `${model.name} (good: ${good}, great: ${great})`;
+  const medium = model.bucket_counts.medium || 0;
+  const high = model.bucket_counts.high || 0;
+  return `${model.name} (medium: ${medium}, high: ${high})`;
 }
 
 async function selectModel(id) {
@@ -193,6 +215,7 @@ async function selectModel(id) {
   renameModelBtn.classList.remove('hidden');
   gallerySection.classList.remove('hidden');
   currentImageId = null;
+  galleryOffset = 0;
 
   await refreshGallery();
 
@@ -231,7 +254,7 @@ modeMenu.querySelectorAll('button[data-mode]').forEach((btn) => {
 
 stopBtn.addEventListener('click', stopCrawl);
 switchUnsupervisedBtn.addEventListener('click', () => setMode('unsupervised'));
-testClassifierBtn.addEventListener('click', () => {
+testRegressorBtn.addEventListener('click', () => {
   if (testingActive) {
     stopTesting();
   } else {
@@ -246,14 +269,17 @@ reviewAutoBtn.addEventListener('click', () => {
   }
 });
 
-gradingButtons.querySelectorAll('button[data-label]').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    if (reviewingAuto) {
-      promoteCurrentAutoImage(btn.dataset.label);
-    } else {
-      gradeCurrentImage(btn.dataset.label);
-    }
-  });
+scoreSlider.addEventListener('input', () => {
+  scoreSliderValue.textContent = scoreSlider.value;
+});
+
+submitScoreBtn.addEventListener('click', () => {
+  const score = Number(scoreSlider.value);
+  if (reviewingAuto) {
+    promoteCurrentAutoImage(score);
+  } else {
+    gradeCurrentImage(score);
+  }
 });
 
 async function startCrawl(chosenMode) {
@@ -356,7 +382,7 @@ async function startTesting() {
   if (!currentModelId) return;
   stopReviewing();
   const modelId = currentModelId;
-  const resp = await fetch(`/api/models/${encodeURIComponent(modelId)}/test-classifier`);
+  const resp = await fetch(`/api/models/${encodeURIComponent(modelId)}/test-regressor`);
   if (!resp.ok || currentModelId !== modelId) return;
   const results = await resp.json();
   if (currentModelId !== modelId) return;
@@ -364,16 +390,34 @@ async function startTesting() {
   testingResults = results;
   testingIndex = 0;
   testingActive = true;
-  testClassifierBtn.textContent = 'End testing early';
-  testClassifierStatus.classList.remove('hidden');
+  testRegressorBtn.textContent = 'End testing early';
+  testRegressorStatus.classList.remove('hidden');
   advanceTesting();
 }
 
 function stopTesting() {
   testingActive = false;
   if (testingTimer) clearTimeout(testingTimer);
-  testClassifierBtn.textContent = 'Test classifier on manually classified images';
-  testClassifierStatus.classList.add('hidden');
+  testRegressorBtn.textContent = 'Test classifier on manually classified images';
+  testRegressorStatus.classList.add('hidden');
+}
+
+function advanceTesting() {
+  if (!testingActive) return;
+  if (testingResults.length === 0 || testingIndex >= testingResults.length) {
+    stopTesting();
+    return;
+  }
+  const seenSoFar = testingResults.slice(0, testingIndex + 1);
+  const validErrors = seenSoFar.filter((r) => r.error !== null).map((r) => r.error);
+  const avgError = validErrors.length ? validErrors.reduce((a, b) => a + b, 0) / validErrors.length : 0;
+  const agreeCount = seenSoFar.filter((r) => r.bucket_agree).length;
+  const agreePct = Math.round((agreeCount / seenSoFar.length) * 100);
+  const left = testingResults.length - (testingIndex + 1);
+  testRegressorStatus.textContent =
+    `Images left to test: ${left}; Average error so far: ${avgError.toFixed(1)} points; Bucket agreement: ${agreePct}%`;
+  testingIndex++;
+  testingTimer = setTimeout(advanceTesting, 80);
 }
 
 async function startReviewing() {
@@ -402,7 +446,7 @@ async function pollNextAutoImage() {
   noImageMessage.textContent = 'Loading next image to review…';
   noImageMessage.classList.remove('hidden');
   setJudgementNeutral('Loading…');
-  setGradingButtonsEnabled(false);
+  setScoreControlsEnabled(false);
 
   const resp = await fetch(`/api/models/${encodeURIComponent(modelId)}/next-auto-image`);
   if (!reviewingAuto || currentModelId !== modelId) return;
@@ -423,57 +467,24 @@ async function pollNextAutoImage() {
   currentImage.src = `/api/image/${data.image_id}?session_id=${encodeURIComponent(modelId)}`;
   currentImage.classList.remove('hidden');
   noImageMessage.classList.add('hidden');
-  renderAutoClassification(data.classification);
-  setGradingButtonsEnabled(true);
+  setSliderValue(data.score);
+  renderJudgement(data.score, 'This was auto-classified with a score of');
+  setScoreControlsEnabled(true);
 }
 
-function renderAutoClassification(classification) {
-  const isPositive = classification !== 'not_part';
-  const labelText = {
-    not_part: 'not part of the class',
-    good: 'part of the class',
-    great: 'a textbook example of the class',
-  }[classification] || classification;
-
-  const icon = document.createElement('span');
-  icon.className = 'judgement-icon';
-  icon.setAttribute('aria-hidden', 'true');
-  icon.textContent = isPositive ? '✓' : '✗';
-
-  const message = document.createElement('span');
-  message.textContent = `This was auto-classified as ${labelText}. Confirm or correct below.`;
-
-  judgementText.className = isPositive ? 'judgement-positive' : 'judgement-negative';
-  judgementText.replaceChildren(icon, message);
-}
-
-async function promoteCurrentAutoImage(label) {
+async function promoteCurrentAutoImage(score) {
   if (!currentAutoImageId || !currentModelId) return;
-  setGradingButtonsEnabled(false);
+  setScoreControlsEnabled(false);
   await fetch(`/api/models/${encodeURIComponent(currentModelId)}/promote-image`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image_id: currentAutoImageId, label }),
+    body: JSON.stringify({ image_id: currentAutoImageId, score }),
   });
+  galleryOffset = 0;
   await refreshGallery();
   await refreshModelList();
   if (currentModelId) modelSelect.value = currentModelId;
   pollNextAutoImage();
-}
-
-function advanceTesting() {
-  if (!testingActive) return;
-  if (testingResults.length === 0 || testingIndex >= testingResults.length) {
-    stopTesting();
-    return;
-  }
-  const seenSoFar = testingResults.slice(0, testingIndex + 1);
-  const correctSoFar = seenSoFar.filter((r) => r.correct).length;
-  const pct = Math.round((correctSoFar / seenSoFar.length) * 100);
-  const left = testingResults.length - (testingIndex + 1);
-  testClassifierStatus.textContent = `Images left to test: ${left}; Current correct classification rate: ${pct}%`;
-  testingIndex++;
-  testingTimer = setTimeout(advanceTesting, 80);
 }
 
 function startStatusPolling() {
@@ -494,7 +505,7 @@ async function refreshStatus() {
   statusGraded.textContent = s.images_graded;
   statusAuto.textContent = s.images_auto_filed;
   statusCurrentUrl.textContent = s.current_url || '';
-  classCounts.innerHTML = Object.entries(s.class_counts)
+  classCounts.innerHTML = Object.entries(s.bucket_counts)
     .map(([label, count]) => `<span class="class-count">${label}: ${count}</span>`)
     .join(' ');
 }
@@ -504,9 +515,10 @@ async function pollNextImage() {
 
   currentImageId = null;
   currentImage.classList.add('hidden');
+  noImageMessage.textContent = 'Waiting for the next image…';
   noImageMessage.classList.remove('hidden');
   setJudgementNeutral('Waiting for image…');
-  setGradingButtonsEnabled(false);
+  setScoreControlsEnabled(false);
 
   const modelId = currentModelId;
   nextImageAbort = new AbortController();
@@ -538,62 +550,70 @@ async function pollNextImage() {
   currentImage.src = `/api/image/${data.image_id}?session_id=${encodeURIComponent(modelId)}`;
   currentImage.classList.remove('hidden');
   noImageMessage.classList.add('hidden');
-  renderPrediction(data.prediction);
-  setGradingButtonsEnabled(true);
+  setSliderValue(data.prediction ? data.prediction.score : 50);
+  if (data.prediction) {
+    renderJudgement(data.prediction.score, 'The model predicts a score of');
+  } else {
+    setJudgementNeutral('Not enough grades yet to make a prediction — keep grading!');
+  }
+  setScoreControlsEnabled(true);
+}
+
+function setSliderValue(score) {
+  const rounded = Math.round(score);
+  scoreSlider.value = rounded;
+  scoreSliderValue.textContent = rounded;
 }
 
 function setJudgementNeutral(text) {
   judgementText.className = '';
+  judgementText.style.color = '';
   judgementText.textContent = text;
 }
 
-function renderPrediction(prediction) {
-  if (!prediction) {
-    setJudgementNeutral('Not enough labels yet to make a prediction — keep grading!');
-    return;
-  }
+// Continuous red (0) -> green (100) interpolation, replacing the old
+// binary not_part/positive color split now that the underlying value is a
+// continuous score rather than a discrete class.
+function scoreToColor(score) {
+  const low = [217, 70, 63]; // matches the old "not part of class" red
+  const high = [47, 158, 68]; // matches the old "good" green
+  const t = Math.max(0, Math.min(1, score / 100));
+  const rgb = low.map((c, i) => Math.round(c + (high[i] - c) * t));
+  return `rgb(${rgb.join(',')})`;
+}
 
-  const isPositive = prediction.label !== 'not_part';
-  const pct = Math.round(prediction.probs[prediction.label] * 100);
-  const labelText = {
-    not_part: 'not part of the class',
-    good: 'part of the class',
-    great: 'a textbook example of the class',
-  }[prediction.label] || prediction.label;
-
+function renderJudgement(score, leadIn) {
+  const rounded = Math.round(score);
   const icon = document.createElement('span');
   icon.className = 'judgement-icon';
   icon.setAttribute('aria-hidden', 'true');
-  icon.textContent = isPositive ? '✓' : '✗';
+  icon.textContent = score >= 50 ? '✓' : '✗';
 
-  const pctEl = document.createElement('strong');
-  pctEl.textContent = `${pct}%`;
+  const scoreEl = document.createElement('strong');
+  scoreEl.textContent = `${rounded}`;
 
   const message = document.createElement('span');
-  message.append(
-    `The model thinks this is ${labelText} (`,
-    pctEl,
-    ' confidence).'
-  );
+  message.append(`${leadIn} `, scoreEl, ' / 100.');
 
-  judgementText.className = isPositive ? 'judgement-positive' : 'judgement-negative';
+  judgementText.className = '';
+  judgementText.style.color = scoreToColor(score);
   judgementText.replaceChildren(icon, message);
 }
 
-function setGradingButtonsEnabled(enabled) {
-  gradingButtons.querySelectorAll('button').forEach((btn) => {
-    btn.disabled = !enabled;
-  });
+function setScoreControlsEnabled(enabled) {
+  scoreSlider.disabled = !enabled;
+  submitScoreBtn.disabled = !enabled;
 }
 
-async function gradeCurrentImage(label) {
+async function gradeCurrentImage(score) {
   if (!currentImageId || !currentModelId) return;
-  setGradingButtonsEnabled(false);
+  setScoreControlsEnabled(false);
   await fetch('/api/grade', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: currentModelId, image_id: currentImageId, label }),
+    body: JSON.stringify({ session_id: currentModelId, image_id: currentImageId, score }),
   });
+  galleryOffset = 0;
   await refreshGallery();
   await refreshModelList();
   if (currentModelId) modelSelect.value = currentModelId;
@@ -601,9 +621,9 @@ async function gradeCurrentImage(label) {
 }
 
 function galleryBadgeClass(label) {
-  if (label === 'good' || label === 'auto-good') return 'good';
-  if (label === 'great' || label === 'auto-great') return 'great';
-  if (label === 'not_part' || label === 'auto_not_part') return 'not-part';
+  if (label === 'low' || label === 'auto-low') return 'low';
+  if (label === 'medium' || label === 'auto-medium') return 'medium';
+  if (label === 'high' || label === 'auto-high') return 'high';
   return '';
 }
 
@@ -611,14 +631,24 @@ async function refreshGallery() {
   if (!currentModelId) return;
   const modelId = currentModelId;
   const params = new URLSearchParams();
-  if (galleryFilterClassification.value) params.set('classification', galleryFilterClassification.value);
+  if (galleryFilterBucket.value) params.set('bucket', galleryFilterBucket.value);
   if (galleryFilterSource.value) params.set('source', galleryFilterSource.value);
+  params.set('offset', galleryOffset);
   const resp = await fetch(`/api/models/${encodeURIComponent(modelId)}/images?${params}`);
   if (!resp.ok || currentModelId !== modelId) return;
-  const images = await resp.json();
+  const page = await resp.json();
   if (currentModelId !== modelId) return;
 
-  galleryCount.textContent = images.length;
+  const images = page.items;
+  const total = page.total;
+
+  galleryCount.textContent = total;
+  const rangeStart = total === 0 ? 0 : galleryOffset + 1;
+  const rangeEnd = Math.min(galleryOffset + GALLERY_PAGE_SIZE, total);
+  galleryPageInfo.textContent = `${rangeStart}–${rangeEnd} of ${total}`;
+  galleryPrevBtn.disabled = galleryOffset <= 0;
+  galleryNextBtn.disabled = galleryOffset + GALLERY_PAGE_SIZE >= total;
+
   galleryGrid.replaceChildren();
   for (const img of images) {
     const cell = document.createElement('div');
@@ -632,7 +662,7 @@ async function refreshGallery() {
     const badge = document.createElement('span');
     const badgeClass = galleryBadgeClass(img.label);
     badge.className = badgeClass ? `gallery-badge gallery-badge-${badgeClass}` : 'gallery-badge';
-    badge.textContent = img.label;
+    badge.textContent = img.score != null ? `${img.label} (${Math.round(img.score)})` : img.label;
 
     cell.append(thumb, badge);
     galleryGrid.appendChild(cell);

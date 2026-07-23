@@ -38,16 +38,19 @@ NEXT_IMAGE_LONG_POLL_TIMEOUT = 10.0
 MIN_IMAGE_WIDTH = 200
 MIN_IMAGE_HEIGHT = 200
 
-LABELS = ("not_part", "good", "great")
-KEPT_LABELS = {"good", "great"}
-
-# By design, not_part/auto_not_part images are normally discarded after their
-# embedding is extracted (only the embedding + label row is kept, to save
-# disk). Flip this on to also write those images to disk like any other
-# label -- useful for building a held-out set of confirmed negative examples
-# for offline evaluation, since none would otherwise exist on disk to test
-# with.
-SAVE_NOT_PART_IMAGES = True
+# A continuous 0-100 score replaces the old discrete not_part/good/great
+# classification -- the real signal users grade on turned out to be a
+# matter of degree (how much of the frame/composition the trained-for
+# property takes up), not a clean category boundary. Every graded/auto-filed
+# image is persisted regardless of score: with a continuous target, low
+# scores are informative training data too, not rejects to discard.
+SCORE_MIN = 0
+SCORE_MAX = 100
+# Coarse buckets purely for folder organization/browsing -- the DB always
+# stores the exact score; these thresholds only decide which folder/gallery
+# bucket an image lands in. score < 34 -> low, 34-66 -> medium, >=67 -> high.
+SCORE_BUCKET_THRESHOLDS = (34, 67)
+BUCKET_LABELS = ("low", "medium", "high")
 
 # Sized generously so a model can be crawled into repeatedly over its
 # lifetime without the bloom filter's false-positive rate degrading much

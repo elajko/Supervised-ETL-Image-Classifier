@@ -110,7 +110,7 @@ button.danger:hover:not(:disabled) {
   flex-wrap: wrap;
 }
 
-#test-classifier-status {
+#test-regressor-status {
   font-size: 0.9rem;
   color: #a5a8b0;
 }
@@ -201,48 +201,29 @@ button.danger:hover:not(:disabled) {
   line-height: 1;
 }
 
-.judgement-positive {
-  color: #4caf50;
-}
-
-.judgement-negative {
-  color: #e05c52;
-}
-
-#grading-buttons {
+#score-slider-row {
   display: flex;
+  align-items: center;
   gap: 0.75rem;
-  flex-wrap: wrap;
+  margin-bottom: 1rem;
 }
 
-#grading-buttons button[data-label="not_part"] {
-  background: #d9463f;
-  border-color: #d9463f;
-  color: white;
+#score-slider-row span {
+  font-size: 0.85rem;
+  color: #a5a8b0;
+  white-space: nowrap;
 }
 
-#grading-buttons button[data-label="not_part"]:hover:not(:disabled) {
-  background: #bd3a34;
+#score-slider {
+  flex: 1;
+  min-width: 0;
+  accent-color: #3b6fd8;
 }
 
-#grading-buttons button[data-label="good"] {
-  background: #2f9e44;
-  border-color: #2f9e44;
-  color: white;
-}
-
-#grading-buttons button[data-label="good"]:hover:not(:disabled) {
-  background: #278239;
-}
-
-#grading-buttons button[data-label="great"] {
-  background: #82d68f;
-  border-color: #82d68f;
-  color: #16351d;
-}
-
-#grading-buttons button[data-label="great"]:hover:not(:disabled) {
-  background: #6bc978;
+#score-slider-value {
+  min-width: 2.5em;
+  text-align: right;
+  font-size: 1.1rem;
 }
 
 #unsupervised-note {
@@ -297,6 +278,19 @@ button.danger:hover:not(:disabled) {
   gap: 0.75rem;
 }
 
+#gallery-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+#gallery-page-info {
+  font-size: 0.85rem;
+  color: #a5a8b0;
+}
+
 .gallery-cell {
   position: relative;
   border-radius: 6px;
@@ -323,17 +317,17 @@ button.danger:hover:not(:disabled) {
   color: #e8e8ea;
 }
 
-.gallery-badge-good {
+.gallery-badge-low {
+  background: #d9463f;
+  color: white;
+}
+
+.gallery-badge-medium {
   background: #2f9e44;
   color: white;
 }
 
-.gallery-badge-great {
+.gallery-badge-high {
   background: #82d68f;
   color: #16351d;
-}
-
-.gallery-badge-not-part {
-  background: #d9463f;
-  color: white;
 }
