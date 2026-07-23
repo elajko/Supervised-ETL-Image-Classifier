@@ -43,6 +43,9 @@
         <button data-mode="supervised">Supervised</button>
         <button data-mode="unsupervised">Unsupervised</button>
       </div>
+      <button id="test-classifier-btn">Test classifier on manually classified images</button>
+      <span id="test-classifier-status" class="hidden"></span>
+      <button id="review-auto-btn">Supervise result of unsupervised images</button>
     </div>
     <p id="setup-error" class="error hidden"></p>
   </section>
@@ -65,25 +68,40 @@
       <div id="class-counts"></div>
     </div>
 
-    <div id="grading-section" class="hidden">
-      <div id="image-frame">
-        <img id="current-image" alt="crawled image awaiting grading">
-        <p id="no-image-message">Waiting for the next image&hellip;</p>
-      </div>
-      <p id="judgement-text">Waiting for image&hellip;</p>
-      <div id="grading-buttons">
-        <button data-label="not_part">Not part of class</button>
-        <button data-label="good">Part of class</button>
-        <button data-label="great">Textbook example of class</button>
-      </div>
-    </div>
-
     <p id="unsupervised-note" class="hidden">Running unsupervised &mdash; images are being auto-classified and filed with no input needed.</p>
+  </section>
+
+  <section id="grading-section" class="hidden">
+    <div id="image-frame">
+      <img id="current-image" alt="image awaiting grading">
+      <p id="no-image-message">Waiting for the next image&hellip;</p>
+    </div>
+    <p id="judgement-text">Waiting for image&hellip;</p>
+    <div id="grading-buttons">
+      <button data-label="not_part">Not part of class</button>
+      <button data-label="good">Part of class</button>
+      <button data-label="great">Textbook example of class</button>
+    </div>
   </section>
 
   <section id="gallery-section" class="hidden">
     <details id="gallery-details">
       <summary>Saved images (<span id="gallery-count">0</span>)</summary>
+      <div id="gallery-filters">
+        <label for="gallery-filter-classification">Classification</label>
+        <select id="gallery-filter-classification">
+          <option value="">All</option>
+          <option value="not_part">Not part of class</option>
+          <option value="good">Good</option>
+          <option value="great">Great</option>
+        </select>
+        <label for="gallery-filter-source">Graded by</label>
+        <select id="gallery-filter-source">
+          <option value="">All</option>
+          <option value="supervised">Supervised (human)</option>
+          <option value="unsupervised">Unsupervised (auto)</option>
+        </select>
+      </div>
       <div id="gallery-grid"></div>
     </details>
   </section>

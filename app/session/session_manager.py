@@ -8,18 +8,11 @@ from app import db
 from app.config import EMBEDDING_MODEL_ID, NEXT_IMAGE_LONG_POLL_TIMEOUT, PENDING_QUEUE_MAXSIZE
 from app.crawler.crawler import CrawledImage, Crawler
 from app.crawler.dedup import ContentHashIndex
+from app.labels import AUTO_LABELS, base_classification, to_auto_label
 from app.ml.classifier import ClassifierHead
 from app.ml.embeddings import deserialize_embedding, serialize_embedding
-from app.storage.image_store import persist_graded_image, should_persist
+from app.storage.image_store import move_graded_image, persist_graded_image, should_persist
 from app.storage.paths import model_path
-
-
-def _to_auto_label(predicted: Optional[str]) -> str:
-    """Maps a classifier prediction to its auto-filed label/folder name.
-    not_part keeps its existing underscore form; good/great use a hyphen."""
-    if predicted is None or predicted == "not_part":
-        return "auto_not_part"
-    return f"auto-{predicted}"
 
 
 class SessionState:
@@ -111,10 +104,30 @@ class SessionManager:
             raise KeyError(f"unknown session {session_id!r}")
         await db.rename_session(session_id, name)
 
-    async def get_images(self, session_id: str, label: Optional[str] = None) -> list[dict]:
+    async def get_images(self, session_id: str, labels: Optional[list[str]] = None) -> list[dict]:
         if await db.get_session(session_id) is None:
             raise KeyError(f"unknown session {session_id!r}")
-        return await db.get_images_for_session(session_id, label)
+        return await db.get_images_for_session(session_id, labels)
+
+    async def test_classifier(self, session_id: str) -> list[dict]:
+        """Evaluates the current classifier against every human-graded image
+        for this model -- no re-embedding needed, embeddings are already
+        stored, so this is just a similarity comparison per image."""
+        state = await self._get_or_create_state(session_id)
+        rows = await db.get_human_graded_images(session_id)
+        results = []
+        for row in rows:
+            embedding = deserialize_embedding(row["embedding"])
+            predicted = state.classifier.predict_label(embedding)
+            results.append(
+                {
+                    "image_id": row["id"],
+                    "predicted": predicted,
+                    "actual": row["label"],
+                    "correct": predicted == row["label"],
+                }
+            )
+        return results
 
     async def start_crawl(self, session_id: str, seed_urls: list[str], mode: str) -> None:
         if await db.get_session(session_id) is None:
@@ -166,7 +179,7 @@ class SessionManager:
                 await state.pending_queue.put(image_id)
             else:
                 predicted = state.classifier.predict_label(crawled.embedding)
-                label = _to_auto_label(predicted)
+                label = to_auto_label(predicted)
                 local_path = None
                 if should_persist(label):
                     local_path = persist_graded_image(session_id, crawled.content_hash, crawled.image_bytes, label)
@@ -245,6 +258,32 @@ class SessionManager:
             local_path = persist_graded_image(session_id, row["content_hash"], image_bytes, label)
         await db.set_image_label(image_id, label, local_path)
 
+        return await self._retrain_and_summarize(session_id, state)
+
+    async def get_next_auto_image(self, session_id: str) -> Optional[dict]:
+        if await db.get_session(session_id) is None:
+            raise KeyError(f"unknown session {session_id!r}")
+        row = await db.get_next_unreviewed_auto_image(session_id, AUTO_LABELS)
+        if row is None:
+            return None
+        return {"image_id": row["id"], "classification": base_classification(row["label"])}
+
+    async def promote_auto_image(self, session_id: str, image_id: str, label: str) -> dict:
+        """Confirms or corrects an auto-filed image's classification, moving
+        it from its auto-* folder into the human-graded one and making it
+        count as verified ground truth for future training/testing."""
+        state = await self._get_or_create_state(session_id)
+        row = await db.get_image(image_id)
+        if row is None or row["session_id"] != session_id:
+            raise KeyError(f"unknown image {image_id!r}")
+
+        old_path = Path(row["local_path"]) if row["local_path"] else None
+        new_path = move_graded_image(session_id, row["content_hash"], old_path, label)
+        await db.set_image_label(image_id, label, new_path)
+
+        return await self._retrain_and_summarize(session_id, state)
+
+    async def _retrain_and_summarize(self, session_id: str, state: SessionState) -> dict:
         training_data = await db.get_training_data(session_id)
         X = np.stack([deserialize_embedding(emb) for emb, _ in training_data])
         y = [lbl for _, lbl in training_data]

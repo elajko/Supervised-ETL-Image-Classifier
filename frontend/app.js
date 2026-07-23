@@ -20,6 +20,9 @@ const startBtn = document.getElementById('start-btn');
 const modeMenu = document.getElementById('mode-menu');
 const stopBtn = document.getElementById('stop-btn');
 const switchUnsupervisedBtn = document.getElementById('switch-unsupervised-btn');
+const testClassifierBtn = document.getElementById('test-classifier-btn');
+const testClassifierStatus = document.getElementById('test-classifier-status');
+const reviewAutoBtn = document.getElementById('review-auto-btn');
 
 const statusMode = document.getElementById('status-mode');
 const statusStatus = document.getElementById('status-status');
@@ -41,6 +44,11 @@ const unsupervisedNote = document.getElementById('unsupervised-note');
 const gallerySection = document.getElementById('gallery-section');
 const galleryCount = document.getElementById('gallery-count');
 const galleryGrid = document.getElementById('gallery-grid');
+const galleryFilterClassification = document.getElementById('gallery-filter-classification');
+const galleryFilterSource = document.getElementById('gallery-filter-source');
+
+galleryFilterClassification.addEventListener('change', refreshGallery);
+galleryFilterSource.addEventListener('change', refreshGallery);
 
 const STORAGE_KEY = 'etl-classifier-current-model-id';
 
@@ -51,6 +59,14 @@ let running = false;
 let statusTimer = null;
 let nextImageAbort = null;
 let currentImageId = null;
+
+let testingActive = false;
+let testingResults = [];
+let testingIndex = 0;
+let testingTimer = null;
+
+let reviewingAuto = false;
+let currentAutoImageId = null;
 
 init();
 
@@ -170,6 +186,8 @@ function formatModelLabel(model) {
 
 async function selectModel(id) {
   stopWatching();
+  stopTesting();
+  stopReviewing();
   currentModelId = id;
   localStorage.setItem(STORAGE_KEY, id);
   renameModelBtn.classList.remove('hidden');
@@ -213,9 +231,29 @@ modeMenu.querySelectorAll('button[data-mode]').forEach((btn) => {
 
 stopBtn.addEventListener('click', stopCrawl);
 switchUnsupervisedBtn.addEventListener('click', () => setMode('unsupervised'));
+testClassifierBtn.addEventListener('click', () => {
+  if (testingActive) {
+    stopTesting();
+  } else {
+    startTesting();
+  }
+});
+reviewAutoBtn.addEventListener('click', () => {
+  if (reviewingAuto) {
+    stopReviewing();
+  } else {
+    startReviewing();
+  }
+});
 
 gradingButtons.querySelectorAll('button[data-label]').forEach((btn) => {
-  btn.addEventListener('click', () => gradeCurrentImage(btn.dataset.label));
+  btn.addEventListener('click', () => {
+    if (reviewingAuto) {
+      promoteCurrentAutoImage(btn.dataset.label);
+    } else {
+      gradeCurrentImage(btn.dataset.label);
+    }
+  });
 });
 
 async function startCrawl(chosenMode) {
@@ -228,6 +266,7 @@ async function startCrawl(chosenMode) {
   }
   setupError.classList.add('hidden');
   modeMenu.classList.add('hidden');
+  stopReviewing();
 
   const resp = await fetch('/api/crawl/start', {
     method: 'POST',
@@ -290,16 +329,151 @@ async function setMode(newMode) {
   // the loop checks `mode` before continuing so it will stop naturally.
 }
 
-function applyModeToUI() {
-  if (mode === 'supervised') {
+// grading-section is shared by two mutually-exclusive activities: grading
+// images live during a supervised crawl, and reviewing already-saved
+// auto-filed images. Show it whenever either is active.
+function updateGradingSectionVisibility() {
+  const showForCrawl = running && mode === 'supervised';
+  if (showForCrawl || reviewingAuto) {
     gradingSection.classList.remove('hidden');
+  } else {
+    gradingSection.classList.add('hidden');
+  }
+}
+
+function applyModeToUI() {
+  updateGradingSectionVisibility();
+  if (mode === 'supervised') {
     unsupervisedNote.classList.add('hidden');
     switchUnsupervisedBtn.classList.remove('hidden');
   } else {
-    gradingSection.classList.add('hidden');
     unsupervisedNote.classList.remove('hidden');
     switchUnsupervisedBtn.classList.add('hidden');
   }
+}
+
+async function startTesting() {
+  if (!currentModelId) return;
+  stopReviewing();
+  const modelId = currentModelId;
+  const resp = await fetch(`/api/models/${encodeURIComponent(modelId)}/test-classifier`);
+  if (!resp.ok || currentModelId !== modelId) return;
+  const results = await resp.json();
+  if (currentModelId !== modelId) return;
+
+  testingResults = results;
+  testingIndex = 0;
+  testingActive = true;
+  testClassifierBtn.textContent = 'End testing early';
+  testClassifierStatus.classList.remove('hidden');
+  advanceTesting();
+}
+
+function stopTesting() {
+  testingActive = false;
+  if (testingTimer) clearTimeout(testingTimer);
+  testClassifierBtn.textContent = 'Test classifier on manually classified images';
+  testClassifierStatus.classList.add('hidden');
+}
+
+async function startReviewing() {
+  if (!currentModelId) return;
+  stopWatching();
+  stopTesting();
+  reviewingAuto = true;
+  reviewAutoBtn.textContent = 'Stop reviewing';
+  updateGradingSectionVisibility();
+  pollNextAutoImage();
+}
+
+function stopReviewing() {
+  reviewingAuto = false;
+  currentAutoImageId = null;
+  reviewAutoBtn.textContent = 'Supervise result of unsupervised images';
+  updateGradingSectionVisibility();
+}
+
+async function pollNextAutoImage() {
+  if (!reviewingAuto || !currentModelId) return;
+  const modelId = currentModelId;
+
+  currentAutoImageId = null;
+  currentImage.classList.add('hidden');
+  noImageMessage.textContent = 'Loading next image to review…';
+  noImageMessage.classList.remove('hidden');
+  setJudgementNeutral('Loading…');
+  setGradingButtonsEnabled(false);
+
+  const resp = await fetch(`/api/models/${encodeURIComponent(modelId)}/next-auto-image`);
+  if (!reviewingAuto || currentModelId !== modelId) return;
+
+  if (resp.status === 204) {
+    noImageMessage.textContent = 'No more auto-classified images to review.';
+    setJudgementNeutral('Nothing left to review.');
+    stopReviewing();
+    return;
+  }
+  if (!resp.ok) {
+    setTimeout(pollNextAutoImage, 1000);
+    return;
+  }
+
+  const data = await resp.json();
+  currentAutoImageId = data.image_id;
+  currentImage.src = `/api/image/${data.image_id}?session_id=${encodeURIComponent(modelId)}`;
+  currentImage.classList.remove('hidden');
+  noImageMessage.classList.add('hidden');
+  renderAutoClassification(data.classification);
+  setGradingButtonsEnabled(true);
+}
+
+function renderAutoClassification(classification) {
+  const isPositive = classification !== 'not_part';
+  const labelText = {
+    not_part: 'not part of the class',
+    good: 'part of the class',
+    great: 'a textbook example of the class',
+  }[classification] || classification;
+
+  const icon = document.createElement('span');
+  icon.className = 'judgement-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = isPositive ? '✓' : '✗';
+
+  const message = document.createElement('span');
+  message.textContent = `This was auto-classified as ${labelText}. Confirm or correct below.`;
+
+  judgementText.className = isPositive ? 'judgement-positive' : 'judgement-negative';
+  judgementText.replaceChildren(icon, message);
+}
+
+async function promoteCurrentAutoImage(label) {
+  if (!currentAutoImageId || !currentModelId) return;
+  setGradingButtonsEnabled(false);
+  await fetch(`/api/models/${encodeURIComponent(currentModelId)}/promote-image`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image_id: currentAutoImageId, label }),
+  });
+  await refreshGallery();
+  await refreshModelList();
+  if (currentModelId) modelSelect.value = currentModelId;
+  pollNextAutoImage();
+}
+
+function advanceTesting() {
+  if (!testingActive) return;
+  if (testingResults.length === 0 || testingIndex >= testingResults.length) {
+    stopTesting();
+    return;
+  }
+  const seenSoFar = testingResults.slice(0, testingIndex + 1);
+  const correctSoFar = seenSoFar.filter((r) => r.correct).length;
+  const pct = Math.round((correctSoFar / seenSoFar.length) * 100);
+  const left = testingResults.length - (testingIndex + 1);
+  testClassifierStatus.textContent = `Images left to test: ${left}; Current correct classification rate: ${pct}%`;
+  testingIndex++;
+  testingTimer = setTimeout(advanceTesting, 80);
 }
 
 function startStatusPolling() {
@@ -436,7 +610,10 @@ function galleryBadgeClass(label) {
 async function refreshGallery() {
   if (!currentModelId) return;
   const modelId = currentModelId;
-  const resp = await fetch(`/api/models/${encodeURIComponent(modelId)}/images`);
+  const params = new URLSearchParams();
+  if (galleryFilterClassification.value) params.set('classification', galleryFilterClassification.value);
+  if (galleryFilterSource.value) params.set('source', galleryFilterSource.value);
+  const resp = await fetch(`/api/models/${encodeURIComponent(modelId)}/images?${params}`);
   if (!resp.ok || currentModelId !== modelId) return;
   const images = await resp.json();
   if (currentModelId !== modelId) return;

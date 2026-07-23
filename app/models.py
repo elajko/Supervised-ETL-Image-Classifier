@@ -78,3 +78,20 @@ class ModelImage(BaseModel):
     label: str
     created_at: str
     graded_at: Optional[str]
+
+
+class ClassifierTestResult(BaseModel):
+    image_id: str
+    predicted: Optional[str]
+    actual: str
+    correct: bool
+
+
+class NextAutoImageResponse(BaseModel):
+    image_id: str
+    classification: str
+
+
+class PromoteImageRequest(BaseModel):
+    image_id: str
+    label: Label

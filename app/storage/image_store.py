@@ -1,3 +1,7 @@
+import shutil
+from pathlib import Path
+from typing import Optional
+
 from app.config import SAVE_NOT_PART_IMAGES
 from app.storage.paths import image_file_path
 
@@ -24,3 +28,23 @@ def persist_graded_image(session_id: str, content_hash: str, image_bytes: bytes,
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(image_bytes)
     return str(path)
+
+
+def move_graded_image(
+    session_id: str, content_hash: str, old_path: Optional[Path], new_label: str
+) -> Optional[str]:
+    """Moves an already-persisted image file to its new label's folder --
+    used when promoting an auto-filed image to a human-confirmed label.
+    Returns the new local_path, or None if the new label is currently
+    configured to be discarded (in which case the old file is deleted,
+    matching should_persist's semantics elsewhere)."""
+    if not should_persist(new_label):
+        if old_path and old_path.exists():
+            old_path.unlink()
+        return None
+
+    new_path = image_file_path(session_id, new_label, content_hash)
+    new_path.parent.mkdir(parents=True, exist_ok=True)
+    if old_path and old_path != new_path and old_path.exists():
+        shutil.move(str(old_path), str(new_path))
+    return str(new_path)

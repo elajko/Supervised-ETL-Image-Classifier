@@ -222,7 +222,37 @@ async def get_training_data(session_id: str) -> list[tuple[bytes, str]]:
             return [(row[0], row[1]) for row in rows]
 
 
-async def get_images_for_session(session_id: str, label: Optional[str] = None) -> list[dict[str, Any]]:
+async def get_human_graded_images(session_id: str) -> list[dict[str, Any]]:
+    """id/embedding/label for every human-graded image -- used to test the
+    current classifier against manually-verified ground truth."""
+    placeholders = ", ".join("?" for _ in HUMAN_LABELS)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT id, embedding, label FROM images WHERE session_id = ? AND label IN ({placeholders})",
+            (session_id, *HUMAN_LABELS),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(row) for row in rows]
+
+
+async def get_next_unreviewed_auto_image(session_id: str, auto_labels: tuple[str, ...]) -> Optional[dict[str, Any]]:
+    """The oldest not-yet-reviewed auto-filed image. Once an image is
+    promoted its label changes to a human one, so it naturally drops out of
+    this query -- no separate "reviewed" flag needed."""
+    placeholders = ", ".join("?" for _ in auto_labels)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT * FROM images WHERE session_id = ? AND label IN ({placeholders}) "
+            "AND local_path IS NOT NULL ORDER BY created_at ASC LIMIT 1",
+            (session_id, *auto_labels),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def get_images_for_session(session_id: str, labels: Optional[list[str]] = None) -> list[dict[str, Any]]:
     """Images actually persisted to disk for this session — excludes discarded
     not_part/auto_not_part rows (which never got a local_path) without needing
     a separate exclusion list."""
@@ -231,9 +261,10 @@ async def get_images_for_session(session_id: str, label: Optional[str] = None) -
         "WHERE session_id = ? AND local_path IS NOT NULL"
     )
     params: list[Any] = [session_id]
-    if label is not None:
-        query += " AND label = ?"
-        params.append(label)
+    if labels:
+        placeholders = ", ".join("?" for _ in labels)
+        query += f" AND label IN ({placeholders})"
+        params.extend(labels)
     query += " ORDER BY graded_at DESC"
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
