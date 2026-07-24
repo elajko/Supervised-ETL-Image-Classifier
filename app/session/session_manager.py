@@ -278,9 +278,11 @@ class SessionManager:
         return {"image_id": row["id"], "score": row["score"], "bucket": base_bucket(row["label"])}
 
     async def promote_auto_image(self, session_id: str, image_id: str, score: float) -> dict:
-        """Confirms or corrects an auto-filed image's score, moving it from
-        its auto-* folder into the human-graded one and making it count as
-        verified ground truth for future training/testing."""
+        """Assigns a new score to any already-persisted image (auto-filed or
+        already human-graded), moving it into the matching human-graded
+        bucket folder so it always counts as supervised ground truth. Used
+        both for confirming/correcting auto-filed images during review and
+        for manually reclassifying an existing gallery image."""
         state = await self._get_or_create_state(session_id)
         row = await db.get_image(image_id)
         if row is None or row["session_id"] != session_id:

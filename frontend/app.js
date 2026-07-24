@@ -98,6 +98,9 @@ let testingTimer = null;
 let reviewingAuto = false;
 let currentAutoImageId = null;
 
+let manualReclassifying = false;
+let manualImageId = null;
+
 init();
 
 async function init() {
@@ -236,12 +239,14 @@ async function selectModel(id) {
     setupSection.classList.add('hidden');
     activeSection.classList.remove('hidden');
     running = true;
+    updateGalleryLockState();
     applyModeToUI();
     startStatusPolling();
     if (mode === 'supervised') pollNextImage();
   } else {
     activeSection.classList.add('hidden');
     setupSection.classList.remove('hidden');
+    updateGalleryLockState();
   }
 }
 
@@ -283,7 +288,9 @@ scoreSlider.addEventListener('input', () => {
 
 submitScoreBtn.addEventListener('click', () => {
   const score = Number(scoreSlider.value);
-  if (reviewingAuto) {
+  if (manualReclassifying) {
+    submitManualReclassify(score);
+  } else if (reviewingAuto) {
     promoteCurrentAutoImage(score);
   } else {
     gradeCurrentImage(score);
@@ -314,6 +321,7 @@ async function startCrawl(chosenMode) {
   }
   mode = chosenMode;
   running = true;
+  updateGalleryLockState();
 
   setupSection.classList.add('hidden');
   activeSection.classList.remove('hidden');
@@ -331,6 +339,7 @@ async function startCrawl(chosenMode) {
 // anyone's watching it.
 function stopWatching() {
   running = false;
+  updateGalleryLockState();
   if (nextImageAbort) nextImageAbort.abort();
   if (statusTimer) clearInterval(statusTimer);
 }
@@ -363,14 +372,22 @@ async function setMode(newMode) {
   // the loop checks `mode` before continuing so it will stop naturally.
 }
 
-// grading-section is shared by two mutually-exclusive activities: grading
-// images live during a supervised crawl, and reviewing already-saved
-// auto-filed images. Show it whenever either is active.
+// grading-section is shared by three mutually-exclusive activities: grading
+// images live during a supervised crawl, reviewing already-saved auto-filed
+// images, and manually reclassifying a gallery image. Show it whenever any
+// of those is active.
 function updateGradingSectionVisibility() {
   const showForCrawl = running && mode === 'supervised';
-  const active = showForCrawl || reviewingAuto;
+  const active = showForCrawl || reviewingAuto || manualReclassifying;
   gradingSection.classList.toggle('hidden', !active);
   rightPanePlaceholder.classList.toggle('hidden', active);
+}
+
+// Reclassifying a gallery image from the gallery itself is only safe while
+// the crawler isn't actively running, to avoid racing with the live-crawl
+// grading flow that also drives the same right-pane controls.
+function updateGalleryLockState() {
+  galleryGrid.classList.toggle('locked', running);
 }
 
 function applyModeToUI() {
@@ -441,6 +458,44 @@ function stopReviewing() {
   currentAutoImageId = null;
   reviewAutoBtn.textContent = 'Supervise result of unsupervised images';
   updateGradingSectionVisibility();
+}
+
+// Loads a gallery image (supervised or unsupervised in origin) into the
+// grading pane for a one-off reclassification. Interrupts any active
+// review session, since both drive the same right-pane controls.
+function startManualReclassify(imageId, score) {
+  if (running || !currentModelId) return;
+  stopReviewing();
+  currentImageId = null;
+  currentAutoImageId = null;
+  manualImageId = imageId;
+  manualReclassifying = true;
+  updateGradingSectionVisibility();
+
+  const initialScore = score != null ? score : 50;
+  currentImage.src = `/api/image/${imageId}?session_id=${encodeURIComponent(currentModelId)}`;
+  currentImage.classList.remove('hidden');
+  noImageMessage.classList.add('hidden');
+  setSliderValue(initialScore);
+  renderJudgement(initialScore, 'Currently rated');
+  setScoreControlsEnabled(true);
+}
+
+async function submitManualReclassify(score) {
+  if (!manualImageId || !currentModelId) return;
+  setScoreControlsEnabled(false);
+  await fetch(`/api/models/${encodeURIComponent(currentModelId)}/promote-image`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image_id: manualImageId, score }),
+  });
+  manualReclassifying = false;
+  manualImageId = null;
+  updateGradingSectionVisibility();
+  galleryOffset = 0;
+  await refreshGallery();
+  await refreshModelList();
+  if (currentModelId) modelSelect.value = currentModelId;
 }
 
 async function pollNextAutoImage() {
@@ -657,10 +712,14 @@ async function refreshGallery() {
   galleryPrevBtn.disabled = galleryOffset <= 0;
   galleryNextBtn.disabled = galleryOffset + GALLERY_PAGE_SIZE >= total;
 
+  galleryGrid.classList.toggle('locked', running);
   galleryGrid.replaceChildren();
   for (const img of images) {
     const cell = document.createElement('div');
     cell.className = 'gallery-cell';
+    cell.tabIndex = 0;
+    cell.setAttribute('role', 'button');
+    cell.title = 'Click to reclassify this image';
 
     const thumb = document.createElement('img');
     thumb.src = `/api/image/${img.image_id}?session_id=${encodeURIComponent(modelId)}`;
@@ -673,6 +732,13 @@ async function refreshGallery() {
     badge.textContent = img.score != null ? `${img.label} (${Math.round(img.score)})` : img.label;
 
     cell.append(thumb, badge);
+    cell.addEventListener('click', () => startManualReclassify(img.image_id, img.score));
+    cell.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        startManualReclassify(img.image_id, img.score);
+      }
+    });
     galleryGrid.appendChild(cell);
   }
 }

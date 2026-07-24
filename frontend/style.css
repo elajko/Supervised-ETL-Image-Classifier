@@ -399,6 +399,21 @@ button.danger:hover:not(:disabled) {
   overflow: hidden;
   background: #16171b;
   aspect-ratio: 1 / 1;
+  cursor: pointer;
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  transition: outline-color 0.1s;
+}
+
+.gallery-cell:hover,
+.gallery-cell:focus-visible {
+  outline-color: #3b6fd8;
+}
+
+#gallery-grid.locked .gallery-cell {
+  cursor: not-allowed;
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 .gallery-cell img {
