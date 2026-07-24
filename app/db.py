@@ -41,6 +41,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_images_session_hash
 
 CREATE INDEX IF NOT EXISTS idx_images_session_label
     ON images(session_id, label);
+
+-- App-level credentials (client id/secret) for a source adapter, registered
+-- by the developer with the site -- distinct from oauth_tokens below, which
+-- holds the per-user access token obtained via the interactive login flow.
+CREATE TABLE IF NOT EXISTS source_credentials (
+    site TEXT PRIMARY KEY,
+    client_id TEXT,
+    client_secret TEXT
+);
+
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    site TEXT PRIMARY KEY,
+    access_token TEXT NOT NULL,
+    refresh_token TEXT,
+    expires_at TEXT,
+    obtained_at TEXT NOT NULL
+);
 """
 
 HUMAN_BUCKETS = ("low", "medium", "high")
@@ -313,3 +330,44 @@ async def get_bucket_counts(session_id: str) -> dict[str, int]:
         ) as cur:
             rows = await cur.fetchall()
             return {label: count for label, count in rows}
+
+
+async def get_source_credentials(site: str) -> Optional[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM source_credentials WHERE site = ?", (site,)) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def set_source_credentials(site: str, client_id: str, client_secret: Optional[str]) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO source_credentials (site, client_id, client_secret) VALUES (?, ?, ?) "
+            "ON CONFLICT(site) DO UPDATE SET client_id = excluded.client_id, client_secret = excluded.client_secret",
+            (site, client_id, client_secret),
+        )
+        await db.commit()
+
+
+async def get_oauth_token(site: str) -> Optional[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM oauth_tokens WHERE site = ?", (site,)) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def set_oauth_token(
+    site: str, access_token: str, refresh_token: Optional[str], expires_at: Optional[str]
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO oauth_tokens (site, access_token, refresh_token, expires_at, obtained_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(site) DO UPDATE SET access_token = excluded.access_token, "
+            "refresh_token = excluded.refresh_token, expires_at = excluded.expires_at, "
+            "obtained_at = excluded.obtained_at",
+            (site, access_token, refresh_token, expires_at, _now()),
+        )
+        await db.commit()

@@ -33,6 +33,7 @@ class CrawlStatusResponse(BaseModel):
     images_auto_filed: int
     current_url: Optional[str]
     bucket_counts: dict[str, int]
+    last_error: Optional[str] = None
 
 
 class Prediction(BaseModel):
@@ -105,3 +106,17 @@ class NextAutoImageResponse(BaseModel):
 class PromoteImageRequest(BaseModel):
     image_id: str
     score: Score = Field(ge=0, le=100)
+
+
+class SourceStatus(BaseModel):
+    name: str
+    domains: list[str]
+    needs_client_secret: bool
+    supports_interactive_auth: bool
+    configured: bool
+    authenticated: bool
+
+
+class SourceCredentialsRequest(BaseModel):
+    client_id: str
+    client_secret: Optional[str] = None

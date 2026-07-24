@@ -50,6 +50,11 @@
       <button id="review-auto-btn">Supervise result of unsupervised images</button>
     </div>
     <p id="setup-error" class="error hidden"></p>
+
+    <div id="source-setup-panel" class="hidden">
+      <p>Some seed URLs need setup before this crawl can start:</p>
+      <div id="source-setup-list"></div>
+    </div>
   </section>
 
   <section id="active-section" class="hidden">
@@ -71,6 +76,7 @@
     </div>
 
     <p id="unsupervised-note" class="hidden">Running unsupervised &mdash; images are being auto-classified and filed with no input needed.</p>
+    <p id="status-last-error" class="error hidden"></p>
   </section>
 
   <section id="gallery-section" class="hidden">

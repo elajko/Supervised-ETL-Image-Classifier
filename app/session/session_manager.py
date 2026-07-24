@@ -27,6 +27,10 @@ class SessionState:
         self.pending_bytes: dict[str, bytes] = {}
         self.stop_event = asyncio.Event()
         self.crawl_task: Optional[asyncio.Task] = None
+        # Most recent per-seed-URL failure from a source adapter (e.g. missing
+        # credentials, a rejected token) -- surfaced in crawl status so the
+        # user isn't left guessing why a source produced nothing.
+        self.last_error: Optional[str] = None
 
 
 class SessionManager:
@@ -147,6 +151,7 @@ class SessionManager:
         await self._stop_existing_crawl(state)
         state.mode = mode
         state.stop_event = asyncio.Event()
+        state.last_error = None
         await db.start_crawl_run(session_id, seed_urls, mode)
 
         async def is_duplicate(content_hash: str) -> bool:
@@ -157,6 +162,9 @@ class SessionManager:
         async def on_progress(**kwargs) -> None:
             await db.update_session_progress(session_id, **kwargs)
 
+        async def on_error(url: str, message: str) -> None:
+            state.last_error = f"{url}: {message}"
+
         sink = self._make_sink(session_id, state)
 
         crawler = Crawler(
@@ -164,6 +172,7 @@ class SessionManager:
             is_duplicate=is_duplicate,
             sink=sink,
             on_progress=on_progress,
+            on_error=on_error,
             stop_event=state.stop_event,
         )
         state.crawl_task = asyncio.create_task(self._run_crawl(session_id, crawler))
@@ -223,6 +232,7 @@ class SessionManager:
             "images_auto_filed": images_auto_filed,
             "current_url": session_row["current_url"],
             "bucket_counts": bucket_counts,
+            "last_error": state.last_error,
         }
 
     async def get_next_image(self, session_id: str, timeout: float = NEXT_IMAGE_LONG_POLL_TIMEOUT) -> Optional[dict]:

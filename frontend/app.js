@@ -23,6 +23,8 @@ const switchUnsupervisedBtn = document.getElementById('switch-unsupervised-btn')
 const testRegressorBtn = document.getElementById('test-regressor-btn');
 const testRegressorStatus = document.getElementById('test-regressor-status');
 const reviewAutoBtn = document.getElementById('review-auto-btn');
+const sourceSetupPanel = document.getElementById('source-setup-panel');
+const sourceSetupList = document.getElementById('source-setup-list');
 
 const statusMode = document.getElementById('status-mode');
 const statusStatus = document.getElementById('status-status');
@@ -33,6 +35,7 @@ const statusGraded = document.getElementById('status-graded');
 const statusAuto = document.getElementById('status-auto');
 const statusCurrentUrl = document.getElementById('status-current-url');
 const classCounts = document.getElementById('class-counts');
+const statusLastError = document.getElementById('status-last-error');
 
 const gradingSection = document.getElementById('grading-section');
 const rightPanePlaceholder = document.getElementById('right-pane-placeholder');
@@ -257,9 +260,154 @@ function parseUrls() {
     .filter((s) => s.length > 0);
 }
 
-startBtn.addEventListener('click', () => {
-  modeMenu.classList.toggle('hidden');
+startBtn.addEventListener('click', async () => {
+  const seedUrls = parseUrls();
+  if (seedUrls.length === 0) {
+    setupError.textContent = 'Enter at least one URL to crawl.';
+    setupError.classList.remove('hidden');
+    return;
+  }
+  setupError.classList.add('hidden');
+  await checkSourceReadiness(seedUrls);
 });
+
+// Detects source-adapter-handled domains (Imgur/DeviantArt/Pinterest) among
+// the seed URLs and, if any need credentials or interactive login that
+// aren't set up yet, blocks the mode menu behind a setup panel instead.
+function hostnameOf(url) {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function matchSource(url, sources) {
+  const host = hostnameOf(url);
+  if (!host) return null;
+  const bare = host.startsWith('www.') ? host.slice(4) : host;
+  return sources.find((s) => s.domains.some((d) => bare === d || bare.endsWith('.' + d))) || null;
+}
+
+async function checkSourceReadiness(seedUrls) {
+  const resp = await fetch('/api/sources');
+  const sources = resp.ok ? await resp.json() : [];
+  const matchedNames = new Set();
+  for (const url of seedUrls) {
+    const m = matchSource(url, sources);
+    if (m) matchedNames.add(m.name);
+  }
+  const matched = sources.filter((s) => matchedNames.has(s.name));
+  const pending = matched.filter((s) => !s.configured || !s.authenticated);
+
+  if (pending.length === 0) {
+    sourceSetupPanel.classList.add('hidden');
+    modeMenu.classList.remove('hidden');
+    return;
+  }
+
+  modeMenu.classList.add('hidden');
+  sourceSetupPanel.classList.remove('hidden');
+  sourceSetupList.replaceChildren();
+  for (const source of pending) {
+    sourceSetupList.appendChild(buildSourceSetupCard(source, seedUrls));
+  }
+}
+
+function buildSourceSetupCard(source, seedUrls) {
+  const card = document.createElement('div');
+  card.className = 'source-setup-card';
+
+  const title = document.createElement('strong');
+  title.textContent = source.name;
+  card.appendChild(title);
+
+  const cardError = document.createElement('p');
+  cardError.className = 'error hidden';
+  card.appendChild(cardError);
+
+  if (!source.configured) {
+    const idInput = document.createElement('input');
+    idInput.type = 'text';
+    idInput.placeholder = 'Client ID';
+
+    let secretInput = null;
+    if (source.needs_client_secret) {
+      secretInput = document.createElement('input');
+      secretInput.type = 'password';
+      secretInput.placeholder = 'Client Secret';
+    }
+
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'primary';
+    saveBtn.textContent = 'Save';
+    saveBtn.addEventListener('click', async () => {
+      const clientId = idInput.value.trim();
+      if (!clientId) {
+        cardError.textContent = 'Enter a Client ID.';
+        cardError.classList.remove('hidden');
+        return;
+      }
+      const body = { client_id: clientId };
+      if (secretInput) body.client_secret = secretInput.value.trim();
+      const resp = await fetch(`/api/sources/${encodeURIComponent(source.name)}/credentials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        cardError.textContent = err.detail || 'Failed to save credentials.';
+        cardError.classList.remove('hidden');
+        return;
+      }
+      await checkSourceReadiness(seedUrls);
+    });
+
+    card.append(idInput);
+    if (secretInput) card.append(secretInput);
+    card.append(saveBtn);
+  } else if (source.supports_interactive_auth) {
+    const authBtn = document.createElement('button');
+    authBtn.className = 'primary';
+    authBtn.textContent = `Authenticate with ${source.name}`;
+    authBtn.addEventListener('click', async () => {
+      const resp = await fetch(`/api/sources/${encodeURIComponent(source.name)}/auth-url`);
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        cardError.textContent = err.detail || 'Failed to start authentication.';
+        cardError.classList.remove('hidden');
+        return;
+      }
+      const { url } = await resp.json();
+      window.open(url, '_blank', 'width=600,height=700');
+      pollSourceAuthStatus(source.name, seedUrls);
+    });
+    card.append(authBtn);
+  } else {
+    const msg = document.createElement('span');
+    msg.textContent = 'Not available right now.';
+    card.append(msg);
+  }
+
+  return card;
+}
+
+function pollSourceAuthStatus(siteName, seedUrls) {
+  const timer = setInterval(async () => {
+    if (sourceSetupPanel.classList.contains('hidden')) {
+      clearInterval(timer);
+      return;
+    }
+    const resp = await fetch(`/api/sources/${encodeURIComponent(siteName)}/status`);
+    if (!resp.ok) return;
+    const status = await resp.json();
+    if (status.authenticated) {
+      clearInterval(timer);
+      await checkSourceReadiness(seedUrls);
+    }
+  }, 1500);
+}
 
 modeMenu.querySelectorAll('button[data-mode]').forEach((btn) => {
   btn.addEventListener('click', () => startCrawl(btn.dataset.mode));
@@ -569,6 +717,12 @@ async function refreshStatus() {
   classCounts.innerHTML = Object.entries(s.bucket_counts)
     .map(([label, count]) => `<span class="class-count">${label}: ${count}</span>`)
     .join(' ');
+  if (s.last_error) {
+    statusLastError.textContent = `Source error: ${s.last_error}`;
+    statusLastError.classList.remove('hidden');
+  } else {
+    statusLastError.classList.add('hidden');
+  }
 }
 
 async function pollNextImage() {

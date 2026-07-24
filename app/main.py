@@ -10,6 +10,7 @@ from app.ml.embeddings import embed_image
 from app.routes.crawl import router as crawl_router
 from app.routes.grading import router as grading_router
 from app.routes.models import router as models_router
+from app.routes.sources import router as sources_router
 
 
 @asynccontextmanager
@@ -34,4 +35,5 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(crawl_router)
 app.include_router(grading_router)
 app.include_router(models_router)
+app.include_router(sources_router)
 app.mount("/", StaticFiles(directory=str(PROJECT_ROOT / "frontend"), html=True), name="frontend")

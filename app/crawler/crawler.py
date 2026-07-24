@@ -19,6 +19,8 @@ from app.config import (
 from app.crawler.image_extract import content_hash, extract_image_urls, extract_link_urls, fetch_image_bytes, meets_minimum_size
 from app.crawler.scope import RobotsCache, in_scope
 from app.ml.embeddings import embed_image
+from app.sources.base import SourceAdapter
+from app.sources.registry import match_source
 
 
 @dataclass
@@ -33,6 +35,7 @@ class CrawledImage:
 Sink = Callable[[CrawledImage], Awaitable[None]]
 IsDuplicate = Callable[[str], Awaitable[bool]]
 OnProgress = Callable[..., Awaitable[None]]
+OnError = Callable[[str, str], Awaitable[None]]
 
 
 class Crawler:
@@ -46,6 +49,7 @@ class Crawler:
         is_duplicate: IsDuplicate,
         sink: Sink,
         on_progress: Optional[OnProgress] = None,
+        on_error: Optional[OnError] = None,
         stop_event: Optional[asyncio.Event] = None,
         max_depth: int = MAX_DEPTH,
         max_pages: int = MAX_PAGES_PER_SESSION,
@@ -55,6 +59,7 @@ class Crawler:
         self.is_duplicate = is_duplicate
         self.sink = sink
         self.on_progress = on_progress
+        self.on_error = on_error
         self.stop_event = stop_event or asyncio.Event()
         self.max_depth = max_depth
         self.max_pages = max_pages
@@ -70,10 +75,16 @@ class Crawler:
     async def run(self) -> None:
         robots = RobotsCache()
         async with httpx.AsyncClient(follow_redirects=True) as http_client:
+            adapter_urls, scrape_urls = self._partition_seed_urls()
+            await self._process_adapter_seeds(http_client, adapter_urls)
+
+            if not scrape_urls or self.stop_event.is_set():
+                return
+
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
                 try:
-                    wave = [(u, 0) for u in self.seed_urls]
+                    wave = [(u, 0) for u in scrape_urls]
                     while wave and not self.stop_event.is_set() and self.pages_visited < self.max_pages:
                         results = await asyncio.gather(
                             *(self._visit(browser, http_client, robots, url, depth) for url, depth in wave)
@@ -81,6 +92,37 @@ class Crawler:
                         wave = [link for links in results for link in links]
                 finally:
                     await browser.close()
+
+    def _partition_seed_urls(self) -> tuple[list[tuple[str, SourceAdapter]], list[str]]:
+        """Splits seed URLs into ones handled by a registered site adapter
+        (e.g. Imgur/DeviantArt/Pinterest, via their APIs) and ones that fall
+        back to the generic Playwright scraper."""
+        adapter_urls: list[tuple[str, SourceAdapter]] = []
+        scrape_urls: list[str] = []
+        for url in self.seed_urls:
+            adapter = match_source(url)
+            if adapter is not None:
+                adapter_urls.append((url, adapter))
+            else:
+                scrape_urls.append(url)
+        return adapter_urls, scrape_urls
+
+    async def _process_adapter_seeds(
+        self, http_client: httpx.AsyncClient, adapter_urls: list[tuple[str, SourceAdapter]]
+    ) -> None:
+        for url, adapter in adapter_urls:
+            if self.stop_event.is_set():
+                return
+            try:
+                source_images = await adapter.fetch_images(url)
+            except Exception as e:
+                if self.on_error:
+                    await self.on_error(url, str(e))
+                continue
+            self.pages_visited += 1
+            if self.on_progress:
+                await self.on_progress(pages_visited=self.pages_visited, current_url=url)
+            await self._process_images(http_client, [img.url for img in source_images], url)
 
     async def _visit(self, browser, http_client: httpx.AsyncClient, robots: RobotsCache, url: str, depth: int):
         if self.stop_event.is_set() or url in self.visited or self.pages_visited >= self.max_pages:
