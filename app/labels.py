@@ -41,12 +41,10 @@ def base_bucket(label: str) -> str:
 AUTO_BUCKETS = tuple(to_auto_bucket(b) for b in BUCKET_LABELS)
 
 
-def resolve_labels(bucket: Optional[str], source: Optional[str]) -> Optional[list[str]]:
-    """Underlying label strings matching a gallery filter. Either axis may be
-    None to mean "all" for that axis. Returns None (no filtering) only when
-    both axes are unfiltered."""
-    if bucket is None and source is None:
+def resolve_source_labels(source: Optional[str]) -> Optional[list[str]]:
+    """Underlying label strings matching a source (supervised/unsupervised)
+    filter alone -- used together with a score-range filter on the `score`
+    column, which replaced the old discrete bucket filter."""
+    if source is None:
         return None
-    buckets = [bucket] if bucket else BUCKET_LABELS
-    sources = [source] if source else SOURCES
-    return [label_for(b, s) for b in buckets for s in sources]
+    return [label_for(b, source) for b in BUCKET_LABELS]

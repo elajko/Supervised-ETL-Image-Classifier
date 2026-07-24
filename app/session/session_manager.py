@@ -115,11 +115,13 @@ class SessionManager:
         limit: Optional[int] = None,
         offset: int = 0,
         sort: str = "newest",
+        min_score: float = 0,
+        max_score: float = 100,
     ) -> tuple[list[dict], int]:
         if await db.get_session(session_id) is None:
             raise KeyError(f"unknown session {session_id!r}")
-        rows = await db.get_images_for_session(session_id, labels, limit, offset, sort)
-        total = await db.count_images_for_session(session_id, labels)
+        rows = await db.get_images_for_session(session_id, labels, limit, offset, sort, min_score, max_score)
+        total = await db.count_images_for_session(session_id, labels, min_score, max_score)
         return rows, total
 
     async def test_regressor(self, session_id: str) -> list[dict]:

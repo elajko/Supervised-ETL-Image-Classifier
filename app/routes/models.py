@@ -2,9 +2,8 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Response
 
-from app.labels import resolve_labels
+from app.labels import resolve_source_labels
 from app.models import (
-    Bucket,
     GallerySort,
     GradeResponse,
     ModelCreateRequest,
@@ -53,14 +52,17 @@ GALLERY_PAGE_SIZE = 25
 @router.get("/{session_id}/images", response_model=ModelImagesPage)
 async def get_model_images(
     session_id: str,
-    bucket: Optional[Bucket] = None,
     source: Optional[str] = None,
     offset: int = 0,
     sort: GallerySort = "newest",
+    min_score: float = 0,
+    max_score: float = 100,
 ) -> ModelImagesPage:
-    labels = resolve_labels(bucket, source)
+    labels = resolve_source_labels(source)
     try:
-        rows, total = await session_manager.get_images(session_id, labels, GALLERY_PAGE_SIZE, offset, sort)
+        rows, total = await session_manager.get_images(
+            session_id, labels, GALLERY_PAGE_SIZE, offset, sort, min_score, max_score
+        )
     except KeyError:
         raise HTTPException(status_code=404, detail="unknown model")
     items = [

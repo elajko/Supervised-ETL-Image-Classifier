@@ -286,13 +286,15 @@ async def get_images_for_session(
     limit: Optional[int] = None,
     offset: int = 0,
     sort: str = "newest",
+    min_score: float = 0,
+    max_score: float = 100,
 ) -> list[dict[str, Any]]:
     """Images actually persisted to disk for this session."""
     query = (
         "SELECT id, label, score, image_url, local_path, created_at, graded_at FROM images "
-        "WHERE session_id = ? AND local_path IS NOT NULL"
+        "WHERE session_id = ? AND local_path IS NOT NULL AND score BETWEEN ? AND ?"
     )
-    params: list[Any] = [session_id]
+    params: list[Any] = [session_id, min_score, max_score]
     if labels:
         placeholders = ", ".join("?" for _ in labels)
         query += f" AND label IN ({placeholders})"
@@ -309,9 +311,14 @@ async def get_images_for_session(
             return [dict(row) for row in rows]
 
 
-async def count_images_for_session(session_id: str, labels: Optional[list[str]] = None) -> int:
-    query = "SELECT COUNT(*) FROM images WHERE session_id = ? AND local_path IS NOT NULL"
-    params: list[Any] = [session_id]
+async def count_images_for_session(
+    session_id: str,
+    labels: Optional[list[str]] = None,
+    min_score: float = 0,
+    max_score: float = 100,
+) -> int:
+    query = "SELECT COUNT(*) FROM images WHERE session_id = ? AND local_path IS NOT NULL AND score BETWEEN ? AND ?"
+    params: list[Any] = [session_id, min_score, max_score]
     if labels:
         placeholders = ", ".join("?" for _ in labels)
         query += f" AND label IN ({placeholders})"

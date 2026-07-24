@@ -83,13 +83,14 @@
     <details id="gallery-details">
       <summary>Saved images (<span id="gallery-count">0</span>)</summary>
       <div id="gallery-filters">
-        <label for="gallery-filter-bucket">Score</label>
-        <select id="gallery-filter-bucket">
-          <option value="">All</option>
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
-        </select>
+        <label>Score</label>
+        <div id="gallery-score-filter" class="dual-slider">
+          <div class="dual-slider-track"></div>
+          <div class="dual-slider-fill" id="gallery-score-filter-fill"></div>
+          <input type="range" id="gallery-score-filter-min" min="0" max="100" step="1" value="0" aria-label="Minimum score">
+          <input type="range" id="gallery-score-filter-max" min="0" max="100" step="1" value="100" aria-label="Maximum score">
+        </div>
+        <span id="gallery-score-filter-value">0 &ndash; 100</span>
         <label for="gallery-filter-source">Graded by</label>
         <select id="gallery-filter-source">
           <option value="">All</option>

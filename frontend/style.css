@@ -379,6 +379,84 @@ button.danger:hover:not(:disabled) {
   white-space: nowrap;
 }
 
+#gallery-score-filter-value {
+  font-size: 0.85rem;
+  color: #a5a8b0;
+  white-space: nowrap;
+  min-width: 4.5em;
+}
+
+.dual-slider {
+  position: relative;
+  width: 140px;
+  height: 20px;
+}
+
+.dual-slider-track {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: #3a3d46;
+  border-radius: 2px;
+  transform: translateY(-50%);
+}
+
+.dual-slider-fill {
+  position: absolute;
+  top: 50%;
+  height: 4px;
+  background: #3b6fd8;
+  border-radius: 2px;
+  transform: translateY(-50%);
+}
+
+.dual-slider input[type="range"] {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 20px;
+  margin: 0;
+  background: transparent;
+  pointer-events: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.dual-slider input[type="range"]::-webkit-slider-runnable-track {
+  -webkit-appearance: none;
+  background: transparent;
+}
+
+.dual-slider input[type="range"]::-moz-range-track {
+  background: transparent;
+}
+
+.dual-slider input[type="range"]::-webkit-slider-thumb {
+  pointer-events: auto;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #3b6fd8;
+  border: 2px solid #16171b;
+  cursor: pointer;
+  margin-top: 3px;
+}
+
+.dual-slider input[type="range"]::-moz-range-thumb {
+  pointer-events: auto;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #3b6fd8;
+  border: 2px solid #16171b;
+  cursor: pointer;
+}
+
 #gallery-sort {
   display: flex;
   margin-left: auto;

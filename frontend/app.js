@@ -50,7 +50,10 @@ const unsupervisedNote = document.getElementById('unsupervised-note');
 const gallerySection = document.getElementById('gallery-section');
 const galleryCount = document.getElementById('gallery-count');
 const galleryGrid = document.getElementById('gallery-grid');
-const galleryFilterBucket = document.getElementById('gallery-filter-bucket');
+const galleryScoreFilterMin = document.getElementById('gallery-score-filter-min');
+const galleryScoreFilterMax = document.getElementById('gallery-score-filter-max');
+const galleryScoreFilterFill = document.getElementById('gallery-score-filter-fill');
+const galleryScoreFilterValue = document.getElementById('gallery-score-filter-value');
 const galleryFilterSource = document.getElementById('gallery-filter-source');
 const galleryPrevBtn = document.getElementById('gallery-prev-btn');
 const galleryNextBtn = document.getElementById('gallery-next-btn');
@@ -60,10 +63,42 @@ const gallerySortRadios = document.querySelectorAll('#gallery-sort input[name="g
 const GALLERY_PAGE_SIZE = 25;
 let galleryOffset = 0;
 
-galleryFilterBucket.addEventListener('change', () => {
+// Dual-thumb range slider: dragging either knob past the other snaps them
+// together rather than letting them cross, and the fill bar between them
+// mirrors the highlighted portion of a normal single-knob slider.
+function updateScoreFilterVisual() {
+  const min = Number(galleryScoreFilterMin.value);
+  const max = Number(galleryScoreFilterMax.value);
+  galleryScoreFilterFill.style.left = `${min}%`;
+  galleryScoreFilterFill.style.width = `${max - min}%`;
+  galleryScoreFilterValue.textContent = `${min} – ${max}`;
+}
+
+function handleScoreFilterInput(dragged) {
+  const min = Number(galleryScoreFilterMin.value);
+  const max = Number(galleryScoreFilterMax.value);
+  if (min > max) {
+    if (dragged === 'min') {
+      galleryScoreFilterMax.value = min;
+    } else {
+      galleryScoreFilterMin.value = max;
+    }
+  }
+  updateScoreFilterVisual();
+}
+
+galleryScoreFilterMin.addEventListener('input', () => handleScoreFilterInput('min'));
+galleryScoreFilterMax.addEventListener('input', () => handleScoreFilterInput('max'));
+galleryScoreFilterMin.addEventListener('change', () => {
   galleryOffset = 0;
   refreshGallery();
 });
+galleryScoreFilterMax.addEventListener('change', () => {
+  galleryOffset = 0;
+  refreshGallery();
+});
+updateScoreFilterVisual();
+
 galleryFilterSource.addEventListener('change', () => {
   galleryOffset = 0;
   refreshGallery();
@@ -846,7 +881,8 @@ async function refreshGallery() {
   if (!currentModelId) return;
   const modelId = currentModelId;
   const params = new URLSearchParams();
-  if (galleryFilterBucket.value) params.set('bucket', galleryFilterBucket.value);
+  params.set('min_score', galleryScoreFilterMin.value);
+  params.set('max_score', galleryScoreFilterMax.value);
   if (galleryFilterSource.value) params.set('source', galleryFilterSource.value);
   const sortRadio = document.querySelector('#gallery-sort input[name="gallery-sort"]:checked');
   if (sortRadio) params.set('sort', sortRadio.value);
