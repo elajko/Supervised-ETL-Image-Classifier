@@ -241,18 +241,12 @@ async function refreshModelList() {
   for (const m of models) {
     const option = document.createElement('option');
     option.value = m.session_id;
-    option.textContent = formatModelLabel(m);
+    option.textContent = m.name;
     modelSelect.appendChild(option);
   }
   if (previousValue && modelsById[previousValue]) {
     modelSelect.value = previousValue;
   }
-}
-
-function formatModelLabel(model) {
-  const medium = model.bucket_counts.medium || 0;
-  const high = model.bucket_counts.high || 0;
-  return `${model.name} (medium: ${medium}, high: ${high})`;
 }
 
 async function selectModel(id) {
