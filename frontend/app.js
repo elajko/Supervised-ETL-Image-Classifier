@@ -18,7 +18,7 @@ const urlInput = document.getElementById('url-input');
 const setupError = document.getElementById('setup-error');
 
 const startBtn = document.getElementById('start-btn');
-const modeMenu = document.getElementById('mode-menu');
+const crawlModeSelect = document.getElementById('crawl-mode-select');
 const stopBtn = document.getElementById('stop-btn');
 const switchUnsupervisedBtn = document.getElementById('switch-unsupervised-btn');
 const testRegressorBtn = document.getElementById('test-regressor-btn');
@@ -44,13 +44,16 @@ const rightPanePlaceholder = document.getElementById('right-pane-placeholder');
 const currentImage = document.getElementById('current-image');
 const noImageMessage = document.getElementById('no-image-message');
 const judgementText = document.getElementById('judgement-text');
+const pageInfoRow = document.getElementById('page-info-row');
+const pageInfoLink = document.getElementById('page-info-link');
+const skipPageBtn = document.getElementById('skip-page-btn');
 const scoreSlider = document.getElementById('score-slider');
 const scoreSliderValue = document.getElementById('score-slider-value');
 const submitScoreBtn = document.getElementById('submit-score-btn');
 const deleteImageBtn = document.getElementById('delete-image-btn');
 const unsupervisedNote = document.getElementById('unsupervised-note');
 
-const gallerySection = document.getElementById('gallery-section');
+const insightsSection = document.getElementById('insights-section');
 const galleryCount = document.getElementById('gallery-count');
 const galleryGrid = document.getElementById('gallery-grid');
 const galleryScoreFilterMin = document.getElementById('gallery-score-filter-min');
@@ -64,16 +67,27 @@ const galleryNextBtn = document.getElementById('gallery-next-btn');
 const galleryPageInfo = document.getElementById('gallery-page-info');
 const gallerySortRadios = document.querySelectorAll('#gallery-sort input[name="gallery-sort"]');
 
-const siteStatsSection = document.getElementById('site-stats-section');
 const siteStatsCount = document.getElementById('site-stats-count');
 const siteStatsList = document.getElementById('site-stats-list');
 
-const scoreHistogramSection = document.getElementById('score-histogram-section');
 const scoreHistogramHuman = document.getElementById('score-histogram-human');
 const scoreHistogramHumanCount = document.getElementById('score-histogram-human-count');
 const scoreHistogramAuto = document.getElementById('score-histogram-auto');
 const scoreHistogramAutoCount = document.getElementById('score-histogram-auto-count');
 const SCORE_HISTOGRAM_BINS = 100;
+
+document.querySelectorAll('.tab-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach((b) => {
+      b.classList.remove('active');
+      b.setAttribute('aria-selected', 'false');
+    });
+    document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
+    btn.classList.add('active');
+    btn.setAttribute('aria-selected', 'true');
+    document.getElementById(btn.dataset.panel).classList.add('active');
+  });
+});
 
 const GALLERY_PAGE_SIZE = 25;
 let galleryOffset = 0;
@@ -266,9 +280,7 @@ deleteModelBtn.addEventListener('click', async () => {
   modelSelect.value = '';
   renameModelBtn.classList.add('hidden');
   deleteModelBtn.classList.add('hidden');
-  gallerySection.classList.add('hidden');
-  siteStatsSection.classList.add('hidden');
-  scoreHistogramSection.classList.add('hidden');
+  insightsSection.classList.add('hidden');
   setupSection.classList.add('hidden');
   activeSection.classList.add('hidden');
   await refreshModelList();
@@ -310,9 +322,7 @@ async function selectModel(id) {
   localStorage.setItem(STORAGE_KEY, id);
   renameModelBtn.classList.remove('hidden');
   deleteModelBtn.classList.remove('hidden');
-  gallerySection.classList.remove('hidden');
-  siteStatsSection.classList.remove('hidden');
-  scoreHistogramSection.classList.remove('hidden');
+  insightsSection.classList.remove('hidden');
   currentImageId = null;
   galleryOffset = 0;
 
@@ -356,12 +366,15 @@ startBtn.addEventListener('click', async () => {
     return;
   }
   setupError.classList.add('hidden');
-  await checkSourceReadiness(seedUrls);
+  const ready = await checkSourceReadiness(seedUrls);
+  if (ready) {
+    await startCrawl(crawlModeSelect.value);
+  }
 });
 
 // Detects source-adapter-handled domains (Imgur/DeviantArt/Pinterest) among
 // the seed URLs and, if any need credentials or interactive login that
-// aren't set up yet, blocks the mode menu behind a setup panel instead.
+// aren't set up yet, blocks the crawl behind a setup panel instead.
 function hostnameOf(url) {
   try {
     return new URL(url).hostname.toLowerCase();
@@ -377,6 +390,7 @@ function matchSource(url, sources) {
   return sources.find((s) => s.domains.some((d) => bare === d || bare.endsWith('.' + d))) || null;
 }
 
+// Returns true once every source used by the seed URLs is ready to crawl.
 async function checkSourceReadiness(seedUrls) {
   const resp = await fetch('/api/sources');
   const sources = resp.ok ? await resp.json() : [];
@@ -390,16 +404,15 @@ async function checkSourceReadiness(seedUrls) {
 
   if (pending.length === 0) {
     sourceSetupPanel.classList.add('hidden');
-    modeMenu.classList.remove('hidden');
-    return;
+    return true;
   }
 
-  modeMenu.classList.add('hidden');
   sourceSetupPanel.classList.remove('hidden');
   sourceSetupList.replaceChildren();
   for (const source of pending) {
     sourceSetupList.appendChild(buildSourceSetupCard(source, seedUrls));
   }
+  return false;
 }
 
 function buildSourceSetupCard(source, seedUrls) {
@@ -497,10 +510,6 @@ function pollSourceAuthStatus(siteName, seedUrls) {
   }, 1500);
 }
 
-modeMenu.querySelectorAll('button[data-mode]').forEach((btn) => {
-  btn.addEventListener('click', () => startCrawl(btn.dataset.mode));
-});
-
 stopBtn.addEventListener('click', stopCrawl);
 switchUnsupervisedBtn.addEventListener('click', () => setMode('unsupervised'));
 testRegressorBtn.addEventListener('click', () => {
@@ -581,7 +590,6 @@ async function startCrawl(chosenMode) {
     return;
   }
   setupError.classList.add('hidden');
-  modeMenu.classList.add('hidden');
   stopReviewing();
 
   const resp = await fetch('/api/crawl/start', {
@@ -665,6 +673,9 @@ function updateGradingSectionVisibility() {
   // reclassified from the gallery -- not a live-crawl image still pending
   // its first grade, nor an auto-filed image mid-review.
   deleteImageBtn.classList.toggle('hidden', !manualReclassifying);
+  // "Skip this page" only means something while a crawl is actively
+  // pulling images -- there's nothing left to affect once it's stopped.
+  if (!showForCrawl) pageInfoRow.classList.add('hidden');
 }
 
 // Reclassifying a gallery image from the gallery itself is only safe while
@@ -679,6 +690,7 @@ function updateGalleryLockState() {
 
 function applyModeToUI() {
   updateGradingSectionVisibility();
+  crawlModeSelect.value = mode;
   if (mode === 'supervised') {
     unsupervisedNote.classList.add('hidden');
     switchUnsupervisedBtn.classList.remove('hidden');
@@ -873,6 +885,7 @@ async function pollNextImage() {
   noImageMessage.textContent = 'Waiting for the next image…';
   noImageMessage.classList.remove('hidden');
   setJudgementNeutral('Waiting for image…');
+  pageInfoRow.classList.add('hidden');
   setScoreControlsEnabled(false);
 
   const modelId = currentModelId;
@@ -911,8 +924,27 @@ async function pollNextImage() {
   } else {
     setJudgementNeutral('Not enough grades yet to make a prediction — keep grading!');
   }
+  if (data.source_page_url) {
+    pageInfoLink.textContent = data.source_page_url;
+    pageInfoLink.href = data.source_page_url;
+    pageInfoRow.classList.remove('hidden');
+  }
   setScoreControlsEnabled(true);
 }
+
+async function skipCurrentPage() {
+  if (!currentImageId || !currentModelId) return;
+  skipPageBtn.disabled = true;
+  await fetch('/api/skip-page', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: currentModelId, image_id: currentImageId }),
+  });
+  currentImageId = null;
+  pollNextImage();
+}
+
+skipPageBtn.addEventListener('click', skipCurrentPage);
 
 function setSliderValue(score) {
   const rounded = Math.round(score);
@@ -959,6 +991,7 @@ function setScoreControlsEnabled(enabled) {
   scoreSlider.disabled = !enabled;
   submitScoreBtn.disabled = !enabled;
   deleteImageBtn.disabled = !enabled;
+  skipPageBtn.disabled = !enabled;
 }
 
 async function gradeCurrentImage(score) {

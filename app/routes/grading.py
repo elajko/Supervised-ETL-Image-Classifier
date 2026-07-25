@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Response
 from PIL import Image
 
 from app.config import NEXT_IMAGE_LONG_POLL_TIMEOUT
-from app.models import GradeRequest, GradeResponse, NextImageResponse
+from app.models import GradeRequest, GradeResponse, NextImageResponse, SkipPageRequest
 from app.session.session_manager import session_manager
 
 router = APIRouter(prefix="/api")
@@ -44,3 +44,12 @@ async def grade(req: GradeRequest) -> GradeResponse:
     except KeyError:
         raise HTTPException(status_code=404, detail="unknown session")
     return GradeResponse(**result)
+
+
+@router.post("/skip-page")
+async def skip_page(req: SkipPageRequest) -> dict:
+    try:
+        result = await session_manager.skip_page(req.session_id, req.image_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="unknown session or image")
+    return result

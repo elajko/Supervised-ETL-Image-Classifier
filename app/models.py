@@ -43,12 +43,18 @@ class Prediction(BaseModel):
 class NextImageResponse(BaseModel):
     image_id: str
     prediction: Optional[Prediction]
+    source_page_url: Optional[str] = None
 
 
 class GradeRequest(BaseModel):
     session_id: str
     image_id: str
     score: Score = Field(ge=0, le=100)
+
+
+class SkipPageRequest(BaseModel):
+    session_id: str
+    image_id: str
 
 
 class GradeResponse(BaseModel):

@@ -31,6 +31,15 @@ class SessionState:
         self.dedup_index = ContentHashIndex()
         self.pending_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=PENDING_QUEUE_MAXSIZE)
         self.pending_bytes: dict[str, bytes] = {}
+        # image_id -> source_page_url, for every image currently sitting in
+        # pending_queue (or just popped off it and awaiting a grade) --
+        # lets "skip this page" find and drop queued images from the same
+        # page without a DB round trip per item.
+        self.pending_source_pages: dict[str, str] = {}
+        # Page URLs the user chose to stop pulling images from mid-crawl.
+        # Purely in-memory and per-crawl-run: forgotten as soon as this
+        # crawl stops, unlike the dedup index which persists across runs.
+        self.skipped_pages: set[str] = set()
         self.stop_event = asyncio.Event()
         self.crawl_task: Optional[asyncio.Task] = None
         # Most recent per-seed-URL failure from a source adapter (e.g. missing
@@ -167,6 +176,8 @@ class SessionManager:
         await self._stop_existing_crawl(state)
         state.mode = mode
         state.save_threshold = save_threshold
+        state.skipped_pages = set()
+        state.pending_source_pages = {}
         state.stop_event = asyncio.Event()
         state.last_error = None
         await db.start_crawl_run(session_id, seed_urls, mode, save_threshold)
@@ -202,6 +213,12 @@ class SessionManager:
 
     def _make_sink(self, session_id: str, state: SessionState):
         async def sink(crawled: CrawledImage) -> None:
+            if crawled.source_page_url in state.skipped_pages:
+                # The user rejected this page mid-crawl -- treat it as if
+                # the crawler never found this image at all (no DB row, no
+                # dedup entry), not just a low-scoring one.
+                return
+
             image_id = await db.insert_pending_image(
                 session_id,
                 crawled.source_page_url,
@@ -225,6 +242,7 @@ class SessionManager:
 
             if state.mode == "supervised":
                 state.pending_bytes[image_id] = crawled.image_bytes
+                state.pending_source_pages[image_id] = crawled.source_page_url or ""
                 await state.pending_queue.put(image_id)
             else:
                 score = predicted if predicted is not None else 0.0
@@ -236,7 +254,54 @@ class SessionManager:
     async def stop_crawl(self, session_id: str) -> None:
         state = self._state(session_id)
         state.stop_event.set()
+        state.skipped_pages = set()
         await db.update_session_status(session_id, "stopped")
+
+    async def skip_page(self, session_id: str, image_id: str) -> dict:
+        """Rejects the page the given (currently-displayed) image came
+        from: drops that image plus every other already-queued image from
+        the same page, and stops any more images from that page being
+        queued for the rest of this crawl. Links found on the page are
+        still followed as normal -- only image extraction from it stops."""
+        state = self._state(session_id)
+        row = await db.get_image(image_id)
+        if row is None or row["session_id"] != session_id:
+            raise KeyError(f"unknown image {image_id!r}")
+
+        page_url = row["source_page_url"]
+        if not page_url:
+            return {"status": "ok", "removed": 0}
+        state.skipped_pages.add(page_url)
+
+        state.pending_bytes.pop(image_id, None)
+        state.pending_source_pages.pop(image_id, None)
+        await db.delete_image(image_id)
+        removed = 1
+
+        # Drain synchronously (no awaits) so a concurrent sink() call can't
+        # race a put() into the middle of this rebuild; batch the DB
+        # deletes for the dropped ones afterward.
+        drained = []
+        while True:
+            try:
+                drained.append(state.pending_queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+
+        to_delete = []
+        for queued_id in drained:
+            if state.pending_source_pages.get(queued_id) == page_url:
+                state.pending_bytes.pop(queued_id, None)
+                state.pending_source_pages.pop(queued_id, None)
+                to_delete.append(queued_id)
+            else:
+                state.pending_queue.put_nowait(queued_id)
+
+        for queued_id in to_delete:
+            await db.delete_image(queued_id)
+        removed += len(to_delete)
+
+        return {"status": "ok", "removed": removed}
 
     async def set_mode(self, session_id: str, mode: str) -> None:
         state = self._state(session_id)
@@ -273,7 +338,7 @@ class SessionManager:
         prediction = None
         if predicted is not None:
             prediction = {"score": predicted}
-        return {"image_id": image_id, "prediction": prediction}
+        return {"image_id": image_id, "prediction": prediction, "source_page_url": row["source_page_url"]}
 
     async def get_image_bytes(self, session_id: str, image_id: str) -> Optional[bytes]:
         """Serves both in-flight grading images (in-memory, not yet graded)

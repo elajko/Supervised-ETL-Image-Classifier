@@ -14,12 +14,14 @@
   <section id="model-section">
     <label for="model-select">Model</label>
     <div id="model-picker-row">
-      <select id="model-select">
-        <option value="">Select a model&hellip;</option>
-      </select>
-      <button id="rename-model-btn" class="hidden">Rename</button>
-      <button id="delete-model-btn" class="danger hidden">Delete model</button>
-      <button id="new-model-btn">+ New model</button>
+      <div id="model-select-group">
+        <select id="model-select">
+          <option value="">Select a model&hellip;</option>
+        </select>
+        <button id="new-model-btn" class="icon-btn" title="New model" aria-label="New model">+</button>
+      </div>
+      <button id="rename-model-btn" class="icon-btn hidden" title="Rename model" aria-label="Rename model">&#9998;</button>
+      <button id="delete-model-btn" class="icon-btn danger hidden" title="Delete model" aria-label="Delete model">&#128465;&#65039;</button>
     </div>
 
     <div id="new-model-form" class="hidden">
@@ -50,20 +52,23 @@
     </div>
 
     <div id="start-control">
+      <select id="crawl-mode-select" aria-label="Crawl mode">
+        <option value="supervised">Supervised</option>
+        <option value="unsupervised">Unsupervised</option>
+      </select>
       <button id="start-btn" class="primary">Start crawling</button>
-      <div id="mode-menu" class="hidden">
-        <button data-mode="supervised">Supervised</button>
-        <button data-mode="unsupervised">Unsupervised</button>
-      </div>
-      <button id="test-regressor-btn">Test classifier on manually classified images</button>
-      <span id="test-regressor-status" class="hidden"></span>
-      <button id="review-auto-btn">Supervise result of unsupervised images</button>
     </div>
     <p id="setup-error" class="error hidden"></p>
 
     <div id="source-setup-panel" class="hidden">
       <p>Some seed URLs need setup before this crawl can start:</p>
       <div id="source-setup-list"></div>
+    </div>
+
+    <div id="setup-secondary-actions">
+      <button id="test-regressor-btn">Test classifier</button>
+      <span id="test-regressor-status" class="hidden"></span>
+      <button id="review-auto-btn">Review auto-filed images</button>
     </div>
   </section>
 
@@ -88,9 +93,14 @@
     <p id="status-last-error" class="error hidden"></p>
   </section>
 
-  <section id="gallery-section" class="hidden">
-    <details id="gallery-details">
-      <summary>Saved images (<span id="gallery-count">0</span>)</summary>
+  <section id="insights-section" class="hidden">
+    <div class="tabs" role="tablist">
+      <button class="tab-btn active" data-panel="gallery-panel" role="tab" aria-selected="true">Gallery <span class="tab-count" id="gallery-count">0</span></button>
+      <button class="tab-btn" data-panel="histogram-panel" role="tab" aria-selected="false">Distribution</button>
+      <button class="tab-btn" data-panel="sites-panel" role="tab" aria-selected="false">Sites <span class="tab-count" id="site-stats-count">0</span></button>
+    </div>
+
+    <div id="gallery-panel" class="tab-panel active">
       <div id="gallery-filters">
         <label>Score</label>
         <div id="gallery-score-filter" class="dual-slider">
@@ -123,12 +133,9 @@
         <span id="gallery-page-info"></span>
         <button id="gallery-next-btn">Next &rarr;</button>
       </div>
-    </details>
-  </section>
+    </div>
 
-  <section id="score-histogram-section" class="hidden">
-    <details id="score-histogram-details" open>
-      <summary>Score distribution</summary>
+    <div id="histogram-panel" class="tab-panel">
       <div class="score-histogram-group">
         <span class="score-histogram-label">Human-graded (<span id="score-histogram-human-count">0</span>)</span>
         <div class="score-histogram-bar" id="score-histogram-human"></div>
@@ -137,15 +144,12 @@
         <span class="score-histogram-label">Auto-filed (<span id="score-histogram-auto-count">0</span>)</span>
         <div class="score-histogram-bar" id="score-histogram-auto"></div>
       </div>
-    </details>
-  </section>
+    </div>
 
-  <section id="site-stats-section" class="hidden">
-    <details id="site-stats-details">
-      <summary>Site ratings (<span id="site-stats-count">0</span>)</summary>
+    <div id="sites-panel" class="tab-panel">
       <p id="site-stats-hint">Average predicted/graded score of images found on each website so far. Informational only &mdash; doesn't affect crawling.</p>
       <div id="site-stats-list"></div>
-    </details>
+    </div>
   </section>
 </div>
 
@@ -156,6 +160,10 @@
       <p id="no-image-message">Waiting for the next image&hellip;</p>
     </div>
     <p id="judgement-text">Waiting for image&hellip;</p>
+    <div id="page-info-row" class="hidden">
+      <span id="page-info-text">From <a id="page-info-link" target="_blank" rel="noopener noreferrer"></a></span>
+      <button id="skip-page-btn" title="Stop getting images from this page for the rest of this crawl">Skip this page</button>
+    </div>
     <div id="score-slider-row">
       <span id="score-slider-label-low">Not part of class</span>
       <input type="range" id="score-slider" min="0" max="100" step="1" value="50">
