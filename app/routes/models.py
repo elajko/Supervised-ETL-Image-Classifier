@@ -14,6 +14,8 @@ from app.models import (
     NextAutoImageResponse,
     PromoteImageRequest,
     RegressorTestResult,
+    ScoreHistogramResponse,
+    SiteStat,
 )
 from app.session.session_manager import session_manager
 
@@ -46,6 +48,15 @@ async def rename_model(session_id: str, req: ModelRenameRequest) -> dict:
     return {"status": "ok"}
 
 
+@router.delete("/{session_id}")
+async def delete_model(session_id: str) -> dict:
+    try:
+        await session_manager.delete_model(session_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="unknown model")
+    return {"status": "ok"}
+
+
 GALLERY_PAGE_SIZE = 25
 
 
@@ -57,11 +68,12 @@ async def get_model_images(
     sort: GallerySort = "newest",
     min_score: float = 0,
     max_score: float = 100,
+    domain: Optional[str] = None,
 ) -> ModelImagesPage:
     labels = resolve_source_labels(source)
     try:
         rows, total = await session_manager.get_images(
-            session_id, labels, GALLERY_PAGE_SIZE, offset, sort, min_score, max_score
+            session_id, labels, GALLERY_PAGE_SIZE, offset, sort, min_score, max_score, domain
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="unknown model")
@@ -76,6 +88,24 @@ async def get_model_images(
         for row in rows
     ]
     return ModelImagesPage(items=items, total=total)
+
+
+@router.get("/{session_id}/site-stats", response_model=list[SiteStat])
+async def get_site_stats(session_id: str) -> list[SiteStat]:
+    try:
+        stats = await session_manager.get_site_stats(session_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="unknown model")
+    return [SiteStat(**s) for s in stats]
+
+
+@router.get("/{session_id}/score-histogram", response_model=ScoreHistogramResponse)
+async def get_score_histogram(session_id: str) -> ScoreHistogramResponse:
+    try:
+        histogram = await session_manager.get_score_histogram(session_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="unknown model")
+    return ScoreHistogramResponse(**histogram)
 
 
 @router.get("/{session_id}/test-regressor", response_model=list[RegressorTestResult])

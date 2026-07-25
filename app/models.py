@@ -32,14 +32,12 @@ class CrawlStatusResponse(BaseModel):
     images_graded: int
     images_auto_filed: int
     current_url: Optional[str]
-    bucket_counts: dict[str, int]
     last_error: Optional[str] = None
     save_threshold: float = 0
 
 
 class Prediction(BaseModel):
     score: float
-    bucket: str
 
 
 class NextImageResponse(BaseModel):
@@ -56,7 +54,7 @@ class GradeRequest(BaseModel):
 class GradeResponse(BaseModel):
     status: str
     training_examples: int
-    bucket_counts: dict[str, int]
+    label_counts: dict[str, int]
 
 
 class ModelCreateRequest(BaseModel):
@@ -74,7 +72,6 @@ class ModelSummary(BaseModel):
     updated_at: str
     mode: str
     status: str
-    bucket_counts: dict[str, int]
 
 
 class ModelImage(BaseModel):
@@ -95,18 +92,27 @@ class RegressorTestResult(BaseModel):
     predicted: Optional[float]
     actual: float
     error: Optional[float]
-    bucket_agree: bool
 
 
 class NextAutoImageResponse(BaseModel):
     image_id: str
     score: float
-    bucket: str
 
 
 class PromoteImageRequest(BaseModel):
     image_id: str
     score: Score = Field(ge=0, le=100)
+
+
+class SiteStat(BaseModel):
+    domain: str
+    average_score: float
+    image_count: int
+
+
+class ScoreHistogramResponse(BaseModel):
+    human: list[int]
+    auto: list[int]
 
 
 class SourceStatus(BaseModel):

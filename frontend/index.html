@@ -18,6 +18,7 @@
         <option value="">Select a model&hellip;</option>
       </select>
       <button id="rename-model-btn" class="hidden">Rename</button>
+      <button id="delete-model-btn" class="danger hidden">Delete model</button>
       <button id="new-model-btn">+ New model</button>
     </div>
 
@@ -81,7 +82,6 @@
       <div class="status-row"><span class="status-label">Graded</span><span id="status-graded"></span></div>
       <div class="status-row"><span class="status-label">Auto-filed</span><span id="status-auto"></span></div>
       <div class="status-row"><span class="status-label">Current URL</span><span id="status-current-url"></span></div>
-      <div id="class-counts"></div>
     </div>
 
     <p id="unsupervised-note" class="hidden">Running unsupervised &mdash; images are being auto-classified and filed with no input needed.</p>
@@ -106,6 +106,10 @@
           <option value="supervised">Supervised (human)</option>
           <option value="unsupervised">Unsupervised (auto)</option>
         </select>
+        <label for="gallery-filter-domain">Site</label>
+        <select id="gallery-filter-domain">
+          <option value="">All</option>
+        </select>
         <div id="gallery-sort" role="radiogroup" aria-label="Sort order">
           <input type="radio" id="sort-newest" name="gallery-sort" value="newest" checked>
           <label for="sort-newest" title="Newest first"><span aria-hidden="true">&#128337;</span> Newest</label>
@@ -119,6 +123,28 @@
         <span id="gallery-page-info"></span>
         <button id="gallery-next-btn">Next &rarr;</button>
       </div>
+    </details>
+  </section>
+
+  <section id="score-histogram-section" class="hidden">
+    <details id="score-histogram-details" open>
+      <summary>Score distribution</summary>
+      <div class="score-histogram-group">
+        <span class="score-histogram-label">Human-graded (<span id="score-histogram-human-count">0</span>)</span>
+        <div class="score-histogram-bar" id="score-histogram-human"></div>
+      </div>
+      <div class="score-histogram-group">
+        <span class="score-histogram-label">Auto-filed (<span id="score-histogram-auto-count">0</span>)</span>
+        <div class="score-histogram-bar" id="score-histogram-auto"></div>
+      </div>
+    </details>
+  </section>
+
+  <section id="site-stats-section" class="hidden">
+    <details id="site-stats-details">
+      <summary>Site ratings (<span id="site-stats-count">0</span>)</summary>
+      <p id="site-stats-hint">Average predicted/graded score of images found on each website so far. Informational only &mdash; doesn't affect crawling.</p>
+      <div id="site-stats-list"></div>
     </details>
   </section>
 </div>

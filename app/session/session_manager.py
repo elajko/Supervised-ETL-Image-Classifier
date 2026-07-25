@@ -1,14 +1,15 @@
 import asyncio
+import shutil
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 
 from app import db
-from app.config import EMBEDDING_MODEL_ID, NEXT_IMAGE_LONG_POLL_TIMEOUT, PENDING_QUEUE_MAXSIZE
+from app.config import EMBEDDING_MODEL_ID, IMAGES_DIR, MODELS_DIR, NEXT_IMAGE_LONG_POLL_TIMEOUT, PENDING_QUEUE_MAXSIZE
 from app.crawler.crawler import CrawledImage, Crawler
 from app.crawler.dedup import ContentHashIndex
-from app.labels import AUTO_BUCKETS, base_bucket, score_to_bucket, to_auto_bucket
+from app.labels import AUTO_LABEL, HUMAN_LABEL
 from app.ml.embeddings import deserialize_embedding, serialize_embedding
 from app.ml.regressor import ScoreRegressor
 from app.storage.image_store import move_graded_image, persist_graded_image
@@ -87,7 +88,6 @@ class SessionManager:
 
     @staticmethod
     async def _row_to_summary(row: dict) -> dict:
-        bucket_counts = await db.get_bucket_counts(row["id"])
         return {
             "session_id": row["id"],
             "name": row["name"],
@@ -95,7 +95,6 @@ class SessionManager:
             "updated_at": row["updated_at"],
             "mode": row["mode"],
             "status": row["status"],
-            "bucket_counts": bucket_counts,
         }
 
     async def get_model(self, session_id: str) -> dict:
@@ -122,12 +121,23 @@ class SessionManager:
         sort: str = "newest",
         min_score: float = 0,
         max_score: float = 100,
+        domain: Optional[str] = None,
     ) -> tuple[list[dict], int]:
         if await db.get_session(session_id) is None:
             raise KeyError(f"unknown session {session_id!r}")
-        rows = await db.get_images_for_session(session_id, labels, limit, offset, sort, min_score, max_score)
-        total = await db.count_images_for_session(session_id, labels, min_score, max_score)
+        rows = await db.get_images_for_session(session_id, labels, limit, offset, sort, min_score, max_score, domain)
+        total = await db.count_images_for_session(session_id, labels, min_score, max_score, domain)
         return rows, total
+
+    async def get_site_stats(self, session_id: str) -> list[dict]:
+        if await db.get_session(session_id) is None:
+            raise KeyError(f"unknown session {session_id!r}")
+        return await db.get_site_stats(session_id)
+
+    async def get_score_histogram(self, session_id: str) -> dict[str, list[int]]:
+        if await db.get_session(session_id) is None:
+            raise KeyError(f"unknown session {session_id!r}")
+        return await db.get_score_histogram(session_id)
 
     async def test_regressor(self, session_id: str) -> list[dict]:
         """Evaluates the current regressor against every human-graded image
@@ -146,7 +156,6 @@ class SessionManager:
                     "predicted": predicted,
                     "actual": actual,
                     "error": abs(predicted - actual) if predicted is not None else None,
-                    "bucket_agree": predicted is not None and score_to_bucket(predicted) == score_to_bucket(actual),
                 }
             )
         return results
@@ -219,9 +228,8 @@ class SessionManager:
                 await state.pending_queue.put(image_id)
             else:
                 score = predicted if predicted is not None else 0.0
-                label = to_auto_bucket(score_to_bucket(score))
-                local_path = persist_graded_image(session_id, crawled.content_hash, crawled.image_bytes, label)
-                await db.set_image_grade(image_id, label, score, local_path)
+                local_path = persist_graded_image(session_id, crawled.content_hash, crawled.image_bytes, AUTO_LABEL)
+                await db.set_image_grade(image_id, AUTO_LABEL, score, local_path)
 
         return sink
 
@@ -238,19 +246,16 @@ class SessionManager:
     async def get_status(self, session_id: str) -> dict:
         state = await self._get_or_create_state(session_id)
         session_row = await db.get_session(session_id)
-        bucket_counts = await db.get_bucket_counts(session_id)
-        images_graded = sum(v for k, v in bucket_counts.items() if k in db.HUMAN_BUCKETS)
-        images_auto_filed = sum(bucket_counts.values()) - images_graded
+        label_counts = await db.get_label_counts(session_id)
         return {
             "status": session_row["status"],
             "mode": state.mode,
             "pages_visited": session_row["pages_visited"],
             "images_found": session_row["images_found"],
             "images_queued": state.pending_queue.qsize(),
-            "images_graded": images_graded,
-            "images_auto_filed": images_auto_filed,
+            "images_graded": label_counts.get(HUMAN_LABEL, 0),
+            "images_auto_filed": label_counts.get(AUTO_LABEL, 0),
             "current_url": session_row["current_url"],
-            "bucket_counts": bucket_counts,
             "last_error": state.last_error,
             "save_threshold": session_row["save_threshold"],
         }
@@ -267,7 +272,7 @@ class SessionManager:
         predicted = state.regressor.predict_score(embedding)
         prediction = None
         if predicted is not None:
-            prediction = {"score": predicted, "bucket": score_to_bucket(predicted)}
+            prediction = {"score": predicted}
         return {"image_id": image_id, "prediction": prediction}
 
     async def get_image_bytes(self, session_id: str, image_id: str) -> Optional[bytes]:
@@ -291,37 +296,35 @@ class SessionManager:
         row = await db.get_image(image_id)
         image_bytes = state.pending_bytes.pop(image_id, None)
 
-        bucket = score_to_bucket(score)
         local_path = None
         if image_bytes is not None:
-            local_path = persist_graded_image(session_id, row["content_hash"], image_bytes, bucket)
-        await db.set_image_grade(image_id, bucket, score, local_path)
+            local_path = persist_graded_image(session_id, row["content_hash"], image_bytes, HUMAN_LABEL)
+        await db.set_image_grade(image_id, HUMAN_LABEL, score, local_path)
 
         return await self._retrain_and_summarize(session_id, state)
 
     async def get_next_auto_image(self, session_id: str) -> Optional[dict]:
         if await db.get_session(session_id) is None:
             raise KeyError(f"unknown session {session_id!r}")
-        row = await db.get_next_unreviewed_auto_image(session_id, AUTO_BUCKETS)
+        row = await db.get_next_unreviewed_auto_image(session_id)
         if row is None:
             return None
-        return {"image_id": row["id"], "score": row["score"], "bucket": base_bucket(row["label"])}
+        return {"image_id": row["id"], "score": row["score"]}
 
     async def promote_auto_image(self, session_id: str, image_id: str, score: float) -> dict:
         """Assigns a new score to any already-persisted image (auto-filed or
-        already human-graded), moving it into the matching human-graded
-        bucket folder so it always counts as supervised ground truth. Used
-        both for confirming/correcting auto-filed images during review and
-        for manually reclassifying an existing gallery image."""
+        already human-graded), moving it into the human-graded folder so it
+        always counts as supervised ground truth. Used both for confirming/
+        correcting auto-filed images during review and for manually
+        reclassifying an existing gallery image."""
         state = await self._get_or_create_state(session_id)
         row = await db.get_image(image_id)
         if row is None or row["session_id"] != session_id:
             raise KeyError(f"unknown image {image_id!r}")
 
-        bucket = score_to_bucket(score)
         old_path = Path(row["local_path"]) if row["local_path"] else None
-        new_path = move_graded_image(session_id, row["content_hash"], old_path, bucket)
-        await db.set_image_grade(image_id, bucket, score, new_path)
+        new_path = move_graded_image(session_id, row["content_hash"], old_path, HUMAN_LABEL)
+        await db.set_image_grade(image_id, HUMAN_LABEL, score, new_path)
 
         return await self._retrain_and_summarize(session_id, state)
 
@@ -346,6 +349,26 @@ class SessionManager:
 
         return await self._retrain_and_summarize(session_id, state)
 
+    async def delete_model(self, session_id: str) -> None:
+        """Deletes a model entirely: every image file and the regressor on
+        disk, plus the session and image rows in the DB. Stops any active
+        crawl first so nothing is still writing into the directory being
+        removed."""
+        if await db.get_session(session_id) is None:
+            raise KeyError(f"unknown session {session_id!r}")
+        state = self._sessions.pop(session_id, None)
+        if state is not None:
+            await self._stop_existing_crawl(state)
+
+        images_dir = IMAGES_DIR / session_id
+        if images_dir.exists():
+            shutil.rmtree(images_dir)
+        model_dir = MODELS_DIR / session_id
+        if model_dir.exists():
+            shutil.rmtree(model_dir)
+
+        await db.delete_session(session_id)
+
     async def _retrain_and_summarize(self, session_id: str, state: SessionState) -> dict:
         training_data = await db.get_training_data(session_id)
         X = np.stack([deserialize_embedding(emb) for emb, _ in training_data])
@@ -353,8 +376,8 @@ class SessionManager:
         state.regressor.fit(X, y)
         state.regressor.save(model_path(session_id))
 
-        bucket_counts = await db.get_bucket_counts(session_id)
-        return {"status": "ok", "training_examples": len(training_data), "bucket_counts": bucket_counts}
+        label_counts = await db.get_label_counts(session_id)
+        return {"status": "ok", "training_examples": len(training_data), "label_counts": label_counts}
 
 
 session_manager = SessionManager()

@@ -46,11 +46,11 @@ MIN_IMAGE_HEIGHT = 200
 # scores are informative training data too, not rejects to discard.
 SCORE_MIN = 0
 SCORE_MAX = 100
-# Coarse buckets purely for folder organization/browsing -- the DB always
-# stores the exact score; these thresholds only decide which folder/gallery
-# bucket an image lands in. score < 34 -> low, 34-66 -> medium, >=67 -> high.
-SCORE_BUCKET_THRESHOLDS = (34, 67)
-BUCKET_LABELS = ("low", "medium", "high")
+
+# Number of equal-width bins the 0-100 score range is split into for the
+# gallery's score-distribution bar (see session_manager.get_score_histogram)
+# -- one bin per integer score point.
+SCORE_HISTOGRAM_BINS = 100
 
 # Sized generously so a model can be crawled into repeatedly over its
 # lifetime without the bloom filter's false-positive rate degrading much

@@ -1,10 +1,9 @@
 """Evaluate the regressor against a model's own human-graded images via
 repeated held-out train/test splits.
 
-Only human-graded scores (bucket low/medium/high) are used -- auto-filed
-(auto-low/auto-medium/auto-high) images are the regressor's own past
-predictions, not verified ground truth, so they can't be used to measure
-accuracy.
+Only human-graded scores are used -- auto-filed images are the regressor's
+own past predictions, not verified ground truth, so they can't be used to
+measure accuracy.
 
 Usage:
     .venv/bin/python3 scripts/evaluate.py <model name or id substring> [--splits 20] [--test-frac 0.3]
@@ -13,15 +12,13 @@ Usage:
 import argparse
 import asyncio
 import sys
-from collections import Counter
 
 import numpy as np
 from scipy.stats import pearsonr
 
 sys.path.insert(0, ".")
 
-from app.db import HUMAN_BUCKETS, get_training_data, list_sessions  # noqa: E402
-from app.labels import score_to_bucket  # noqa: E402
+from app.db import get_training_data, list_sessions  # noqa: E402
 from app.ml.embeddings import deserialize_embedding  # noqa: E402
 from app.ml.regressor import ScoreRegressor  # noqa: E402
 
@@ -60,7 +57,6 @@ def evaluate_once(X: np.ndarray, y: np.ndarray, test_frac: float, rng: np.random
     y_pred = np.array([reg.predict_score(X[i]) for i in test_idx])
 
     errors = np.abs(y_pred - y_true)
-    bucket_agree = np.mean([score_to_bucket(p) == score_to_bucket(a) for p, a in zip(y_pred, y_true)])
     r = float("nan")
     if len(y_true) > 1 and np.std(y_pred) > 0:
         r, _ = pearsonr(y_pred, y_true)
@@ -68,7 +64,6 @@ def evaluate_once(X: np.ndarray, y: np.ndarray, test_frac: float, rng: np.random
     return {
         "mae": float(np.mean(errors)),
         "pearson_r": r,
-        "bucket_agreement": float(bucket_agree),
         "n_test": len(test_idx),
     }
 
@@ -88,12 +83,8 @@ async def main() -> None:
 
     X = np.stack([deserialize_embedding(emb) for emb, _ in training_data])
     y = np.array([score for _, score in training_data], dtype=float)
-    buckets = Counter(score_to_bucket(s) for s in y)
     print(f"model: {name} ({session_id})")
-    print(f"human-graded examples: {len(y)} -- score range [{y.min():.0f}, {y.max():.0f}], buckets {dict(buckets)}")
-    for bucket in HUMAN_BUCKETS:
-        if buckets.get(bucket, 0) < 2:
-            print(f"WARNING: only {buckets.get(bucket, 0)} examples in the {bucket!r} bucket -- splits may be unstable")
+    print(f"human-graded examples: {len(y)} -- score range [{y.min():.0f}, {y.max():.0f}]")
     print()
 
     rng = np.random.default_rng(args.seed)
@@ -101,12 +92,10 @@ async def main() -> None:
 
     maes = [r["mae"] for r in results]
     corrs = [r["pearson_r"] for r in results]
-    agrees = [r["bucket_agreement"] for r in results]
 
     print(f"Over {args.splits} random splits ({args.test_frac:.0%} held out each time):")
     print(f"  MAE (0-100 scale):   mean={np.mean(maes):.2f}  std={np.std(maes):.2f}")
     print(f"  Pearson correlation: mean={np.nanmean(corrs):.3f}  std={np.nanstd(corrs):.3f}")
-    print(f"  Bucket agreement:    mean={np.mean(agrees):.3f}  std={np.std(agrees):.3f}")
 
 
 if __name__ == "__main__":

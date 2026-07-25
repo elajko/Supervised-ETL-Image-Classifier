@@ -1,5 +1,6 @@
 const modelSelect = document.getElementById('model-select');
 const renameModelBtn = document.getElementById('rename-model-btn');
+const deleteModelBtn = document.getElementById('delete-model-btn');
 const newModelBtn = document.getElementById('new-model-btn');
 const newModelForm = document.getElementById('new-model-form');
 const newModelNameInput = document.getElementById('new-model-name');
@@ -36,7 +37,6 @@ const statusQueued = document.getElementById('status-queued');
 const statusGraded = document.getElementById('status-graded');
 const statusAuto = document.getElementById('status-auto');
 const statusCurrentUrl = document.getElementById('status-current-url');
-const classCounts = document.getElementById('class-counts');
 const statusLastError = document.getElementById('status-last-error');
 
 const gradingSection = document.getElementById('grading-section');
@@ -58,10 +58,22 @@ const galleryScoreFilterMax = document.getElementById('gallery-score-filter-max'
 const galleryScoreFilterFill = document.getElementById('gallery-score-filter-fill');
 const galleryScoreFilterValue = document.getElementById('gallery-score-filter-value');
 const galleryFilterSource = document.getElementById('gallery-filter-source');
+const galleryFilterDomain = document.getElementById('gallery-filter-domain');
 const galleryPrevBtn = document.getElementById('gallery-prev-btn');
 const galleryNextBtn = document.getElementById('gallery-next-btn');
 const galleryPageInfo = document.getElementById('gallery-page-info');
 const gallerySortRadios = document.querySelectorAll('#gallery-sort input[name="gallery-sort"]');
+
+const siteStatsSection = document.getElementById('site-stats-section');
+const siteStatsCount = document.getElementById('site-stats-count');
+const siteStatsList = document.getElementById('site-stats-list');
+
+const scoreHistogramSection = document.getElementById('score-histogram-section');
+const scoreHistogramHuman = document.getElementById('score-histogram-human');
+const scoreHistogramHumanCount = document.getElementById('score-histogram-human-count');
+const scoreHistogramAuto = document.getElementById('score-histogram-auto');
+const scoreHistogramAutoCount = document.getElementById('score-histogram-auto-count');
+const SCORE_HISTOGRAM_BINS = 100;
 
 const GALLERY_PAGE_SIZE = 25;
 let galleryOffset = 0;
@@ -103,6 +115,10 @@ galleryScoreFilterMax.addEventListener('change', () => {
 updateScoreFilterVisual();
 
 galleryFilterSource.addEventListener('change', () => {
+  galleryOffset = 0;
+  refreshGallery();
+});
+galleryFilterDomain.addEventListener('change', () => {
   galleryOffset = 0;
   refreshGallery();
 });
@@ -224,6 +240,40 @@ confirmRenameBtn.addEventListener('click', async () => {
   modelSelect.value = currentModelId;
 });
 
+// Unlike image deletion, there's no shift-click bypass here on purpose --
+// deleting an entire model (every image and its regressor) is much harder
+// to shrug off, so the confirmation is never skippable.
+deleteModelBtn.addEventListener('click', async () => {
+  if (!currentModelId) return;
+  const model = modelsById[currentModelId];
+  const name = model ? model.name : 'this model';
+  const confirmed = confirm(`Delete model "${name}" and all its images? This cannot be undone.`);
+  if (!confirmed) return;
+
+  const resp = await fetch(`/api/models/${encodeURIComponent(currentModelId)}`, { method: 'DELETE' });
+  if (!resp.ok) {
+    showModelError('Failed to delete model.');
+    return;
+  }
+  hideModelError();
+  stopWatching();
+  stopTesting();
+  stopReviewing();
+  if (localStorage.getItem(STORAGE_KEY) === currentModelId) {
+    localStorage.removeItem(STORAGE_KEY);
+  }
+  currentModelId = null;
+  modelSelect.value = '';
+  renameModelBtn.classList.add('hidden');
+  deleteModelBtn.classList.add('hidden');
+  gallerySection.classList.add('hidden');
+  siteStatsSection.classList.add('hidden');
+  scoreHistogramSection.classList.add('hidden');
+  setupSection.classList.add('hidden');
+  activeSection.classList.add('hidden');
+  await refreshModelList();
+});
+
 function showModelError(text) {
   modelError.textContent = text;
   modelError.classList.remove('hidden');
@@ -259,11 +309,16 @@ async function selectModel(id) {
   currentModelId = id;
   localStorage.setItem(STORAGE_KEY, id);
   renameModelBtn.classList.remove('hidden');
+  deleteModelBtn.classList.remove('hidden');
   gallerySection.classList.remove('hidden');
+  siteStatsSection.classList.remove('hidden');
+  scoreHistogramSection.classList.remove('hidden');
   currentImageId = null;
   galleryOffset = 0;
 
   await refreshGallery();
+  await refreshSiteStats();
+  await refreshScoreHistogram();
 
   const resp = await fetch(`/api/crawl/status?session_id=${encodeURIComponent(id)}`);
   if (!resp.ok) return;
@@ -511,6 +566,8 @@ async function deleteCurrentManualImage() {
   updateGradingSectionVisibility();
   galleryOffset = 0;
   await refreshGallery();
+  await refreshSiteStats();
+  await refreshScoreHistogram();
   await refreshModelList();
   if (currentModelId) modelSelect.value = currentModelId;
 }
@@ -664,11 +721,9 @@ function advanceTesting() {
   const seenSoFar = testingResults.slice(0, testingIndex + 1);
   const validErrors = seenSoFar.filter((r) => r.error !== null).map((r) => r.error);
   const avgError = validErrors.length ? validErrors.reduce((a, b) => a + b, 0) / validErrors.length : 0;
-  const agreeCount = seenSoFar.filter((r) => r.bucket_agree).length;
-  const agreePct = Math.round((agreeCount / seenSoFar.length) * 100);
   const left = testingResults.length - (testingIndex + 1);
   testRegressorStatus.textContent =
-    `Images left to test: ${left}; Average error so far: ${avgError.toFixed(1)} points; Bucket agreement: ${agreePct}%`;
+    `Images left to test: ${left}; Average error so far: ${avgError.toFixed(1)} points`;
   testingIndex++;
   testingTimer = setTimeout(advanceTesting, 80);
 }
@@ -724,6 +779,8 @@ async function submitManualReclassify(score) {
   updateGradingSectionVisibility();
   galleryOffset = 0;
   await refreshGallery();
+  await refreshSiteStats();
+  await refreshScoreHistogram();
   await refreshModelList();
   if (currentModelId) modelSelect.value = currentModelId;
 }
@@ -773,6 +830,8 @@ async function promoteCurrentAutoImage(score) {
   });
   galleryOffset = 0;
   await refreshGallery();
+  await refreshSiteStats();
+  await refreshScoreHistogram();
   await refreshModelList();
   if (currentModelId) modelSelect.value = currentModelId;
   pollNextAutoImage();
@@ -797,15 +856,13 @@ async function refreshStatus() {
   statusAuto.textContent = s.images_auto_filed;
   statusCurrentUrl.textContent = s.current_url || '';
   setSaveThresholdValue(s.save_threshold);
-  classCounts.innerHTML = Object.entries(s.bucket_counts)
-    .map(([label, count]) => `<span class="class-count">${label}: ${count}</span>`)
-    .join(' ');
   if (s.last_error) {
     statusLastError.textContent = `Source error: ${s.last_error}`;
     statusLastError.classList.remove('hidden');
   } else {
     statusLastError.classList.add('hidden');
   }
+  await refreshScoreHistogram();
 }
 
 async function pollNextImage() {
@@ -914,16 +971,104 @@ async function gradeCurrentImage(score) {
   });
   galleryOffset = 0;
   await refreshGallery();
+  await refreshSiteStats();
+  await refreshScoreHistogram();
   await refreshModelList();
   if (currentModelId) modelSelect.value = currentModelId;
   pollNextImage();
 }
 
-function galleryBadgeClass(label) {
-  if (label === 'low' || label === 'auto-low') return 'low';
-  if (label === 'medium' || label === 'auto-medium') return 'medium';
-  if (label === 'high' || label === 'auto-high') return 'high';
-  return '';
+// Renders a score distribution as a classic bar chart: SCORE_HISTOGRAM_BINS
+// equal-width columns (one per integer score), each column's height scaled
+// relative to the tallest bin so the shape of the distribution is visible,
+// colored red (lowest score) to green (highest) by its position.
+async function refreshScoreHistogram() {
+  if (!currentModelId) return;
+  const modelId = currentModelId;
+  const resp = await fetch(`/api/models/${encodeURIComponent(modelId)}/score-histogram`);
+  if (!resp.ok || currentModelId !== modelId) return;
+  const histogram = await resp.json();
+  if (currentModelId !== modelId) return;
+
+  renderScoreHistogramBar(scoreHistogramHuman, histogram.human);
+  renderScoreHistogramBar(scoreHistogramAuto, histogram.auto);
+  scoreHistogramHumanCount.textContent = histogram.human.reduce((a, b) => a + b, 0);
+  scoreHistogramAutoCount.textContent = histogram.auto.reduce((a, b) => a + b, 0);
+}
+
+function renderScoreHistogramBar(container, bins) {
+  const maxCount = Math.max(...bins);
+  container.replaceChildren();
+  container.classList.toggle('empty', maxCount === 0);
+  if (maxCount === 0) return;
+
+  // Log-scaled (not linear) -- the lowest/highest-score bins tend to
+  // dominate the count so heavily that a linear scale flattens every other
+  // bin to near-invisible. log1p handles zero-count bins cleanly (maps to
+  // 0 height) without a -Infinity from log(0).
+  const logMax = Math.log1p(maxCount);
+  const binWidth = 100 / SCORE_HISTOGRAM_BINS;
+  bins.forEach((count, i) => {
+    const column = document.createElement('div');
+    column.className = 'score-histogram-segment';
+    column.style.height = `${(Math.log1p(count) / logMax) * 100}%`;
+    const midpoint = i * binWidth + binWidth / 2;
+    column.style.backgroundColor = scoreToColor(midpoint);
+    if (count > 0) {
+      const rangeStart = Math.round(i * binWidth);
+      const rangeEnd = Math.round((i + 1) * binWidth);
+      column.title = `${count} image${count === 1 ? '' : 's'} scored ${rangeStart}-${rangeEnd}`;
+    }
+    container.appendChild(column);
+  });
+}
+
+async function refreshSiteStats() {
+  if (!currentModelId) return;
+  const modelId = currentModelId;
+  const resp = await fetch(`/api/models/${encodeURIComponent(modelId)}/site-stats`);
+  if (!resp.ok || currentModelId !== modelId) return;
+  const stats = await resp.json();
+  if (currentModelId !== modelId) return;
+
+  siteStatsCount.textContent = stats.length;
+  siteStatsList.replaceChildren();
+  for (const site of stats) {
+    const row = document.createElement('div');
+    row.className = 'site-stats-row';
+
+    const domainEl = document.createElement('span');
+    domainEl.className = 'site-stats-domain';
+    domainEl.textContent = site.domain;
+
+    const scoreEl = document.createElement('span');
+    scoreEl.className = 'site-stats-score';
+    scoreEl.textContent = Math.round(site.average_score);
+    scoreEl.style.color = scoreToColor(site.average_score);
+
+    const countEl = document.createElement('span');
+    countEl.className = 'site-stats-image-count';
+    countEl.textContent = `${site.image_count} image${site.image_count === 1 ? '' : 's'}`;
+
+    row.append(domainEl, scoreEl, countEl);
+    siteStatsList.appendChild(row);
+  }
+
+  populateDomainFilter(stats.map((s) => s.domain));
+}
+
+function populateDomainFilter(domains) {
+  const previousValue = galleryFilterDomain.value;
+  galleryFilterDomain.innerHTML = '<option value="">All</option>';
+  for (const domain of domains) {
+    const option = document.createElement('option');
+    option.value = domain;
+    option.textContent = domain;
+    galleryFilterDomain.appendChild(option);
+  }
+  if (domains.includes(previousValue)) {
+    galleryFilterDomain.value = previousValue;
+  }
 }
 
 async function refreshGallery() {
@@ -933,6 +1078,7 @@ async function refreshGallery() {
   params.set('min_score', galleryScoreFilterMin.value);
   params.set('max_score', galleryScoreFilterMax.value);
   if (galleryFilterSource.value) params.set('source', galleryFilterSource.value);
+  if (galleryFilterDomain.value) params.set('domain', galleryFilterDomain.value);
   const sortRadio = document.querySelector('#gallery-sort input[name="gallery-sort"]:checked');
   if (sortRadio) params.set('sort', sortRadio.value);
   params.set('offset', galleryOffset);
@@ -966,9 +1112,13 @@ async function refreshGallery() {
     thumb.loading = 'lazy';
 
     const badge = document.createElement('span');
-    const badgeClass = galleryBadgeClass(img.label);
-    badge.className = badgeClass ? `gallery-badge gallery-badge-${badgeClass}` : 'gallery-badge';
-    badge.textContent = img.score != null ? `${img.label} (${Math.round(img.score)})` : img.label;
+    badge.className = 'gallery-badge';
+    if (img.score != null) {
+      badge.style.backgroundColor = scoreToColor(img.score);
+      badge.style.color = '#16171b';
+    }
+    const originText = img.label === 'auto' ? 'auto' : 'human';
+    badge.textContent = img.score != null ? `${originText} · ${Math.round(img.score)}` : originText;
 
     cell.append(thumb, badge);
     cell.addEventListener('click', () => startManualReclassify(img.image_id, img.score));

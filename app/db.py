@@ -2,10 +2,12 @@ import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import aiosqlite
 
-from app.config import DATA_DIR, DB_PATH
+from app.config import DATA_DIR, DB_PATH, SCORE_HISTOGRAM_BINS
+from app.labels import AUTO_LABEL, HUMAN_LABEL
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -29,9 +31,10 @@ CREATE TABLE IF NOT EXISTS images (
     content_hash TEXT NOT NULL,
     embedding BLOB,
     embedding_model TEXT,
-    label TEXT,                    -- NULL | low | medium | high | auto-low | auto-medium | auto-high
+    label TEXT,                    -- NULL | human | auto
     score REAL,                    -- 0-100 continuous score: human-given if graded, model-predicted if auto-filed pending review
     local_path TEXT,
+    domain TEXT,                   -- website (not page) this image was found on, e.g. 'example.com'
     graded_at TEXT,
     created_at TEXT NOT NULL
 );
@@ -60,11 +63,20 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
 );
 """
 
-HUMAN_BUCKETS = ("low", "medium", "high")
-
-
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _domain_from_url(url: Optional[str]) -> Optional[str]:
+    """The website (not page) a URL belongs to, e.g. 'example.com' -- 'www.'
+    is stripped so 'www.example.com' and 'example.com' count as the same
+    site."""
+    if not url:
+        return None
+    domain = urlparse(url).netloc.lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
+    return domain or None
 
 
 async def init_db() -> None:
@@ -97,6 +109,43 @@ async def init_db() -> None:
             session_cols = [row[1] for row in await cur.fetchall()]
         if "save_threshold" not in session_cols:
             await db.execute("ALTER TABLE sessions ADD COLUMN save_threshold REAL NOT NULL DEFAULT 0")
+            await db.commit()
+        # Migration guard: any pre-existing local data/app.db predates the
+        # `domain` column. Add it and backfill from each row's
+        # source_page_url so existing images stay filterable by site.
+        async with db.execute("PRAGMA table_info(images)") as cur:
+            image_cols = [row[1] for row in await cur.fetchall()]
+        if "domain" not in image_cols:
+            await db.execute("ALTER TABLE images ADD COLUMN domain TEXT")
+            await db.commit()
+            async with db.execute("SELECT id, source_page_url FROM images WHERE source_page_url IS NOT NULL") as cur:
+                rows = await cur.fetchall()
+            updates = [(_domain_from_url(url), image_id) for image_id, url in rows]
+            await db.executemany("UPDATE images SET domain = ? WHERE id = ?", updates)
+            await db.commit()
+        # Created here (not in SCHEMA) since the `domain` column itself is
+        # only guaranteed to exist once the migration guard above has run --
+        # for a pre-existing DB, an index on it inside the initial
+        # executescript would fail before the ALTER TABLE ever runs.
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_images_session_domain ON images(session_id, domain)")
+        await db.commit()
+        # Migration guard: `label` used to encode a 6-way discrete bucket
+        # (low/medium/high, auto-low/auto-medium/auto-high) alongside the
+        # continuous score -- now that score is the only source of truth
+        # for rating, label just tracks where a score came from: 'human' or
+        # 'auto'. Old values remap deterministically by their 'auto-'
+        # prefix. Files are left where they are on disk -- local_path is
+        # already the authoritative reference for every read, nothing
+        # recomputes a path from label, so there's nothing to move.
+        async with db.execute(
+            "SELECT DISTINCT label FROM images WHERE label IS NOT NULL AND label NOT IN (?, ?)",
+            (HUMAN_LABEL, AUTO_LABEL),
+        ) as cur:
+            legacy_labels = [row[0] for row in await cur.fetchall()]
+        for old_label in legacy_labels:
+            new_label = AUTO_LABEL if old_label.startswith("auto") else HUMAN_LABEL
+            await db.execute("UPDATE images SET label = ? WHERE label = ?", (new_label, old_label))
+        if legacy_labels:
             await db.commit()
 
 
@@ -137,6 +186,13 @@ async def rename_session(session_id: str, name: str) -> None:
             "UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?",
             (name, _now(), session_id),
         )
+        await db.commit()
+
+
+async def delete_session(session_id: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM images WHERE session_id = ?", (session_id,))
+        await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         await db.commit()
 
 
@@ -216,12 +272,13 @@ async def insert_pending_image(
 ) -> str:
     image_id = str(uuid.uuid4())
     now = _now()
+    domain = _domain_from_url(source_page_url)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO images (id, session_id, source_page_url, image_url, content_hash, "
-            "embedding, embedding_model, label, score, local_path, graded_at, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?)",
-            (image_id, session_id, source_page_url, image_url, content_hash, embedding, embedding_model, now),
+            "embedding, embedding_model, label, score, local_path, domain, graded_at, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, NULL, ?)",
+            (image_id, session_id, source_page_url, image_url, content_hash, embedding, embedding_model, domain, now),
         )
         await db.commit()
     return image_id
@@ -254,11 +311,10 @@ async def get_training_data(session_id: str) -> list[tuple[bytes, float]]:
     """Returns (embedding_bytes, score) pairs for human-graded images only —
     auto-filed images are the model's own past predictions and must not be
     fed back into training."""
-    placeholders = ", ".join("?" for _ in HUMAN_BUCKETS)
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            f"SELECT embedding, score FROM images WHERE session_id = ? AND label IN ({placeholders})",
-            (session_id, *HUMAN_BUCKETS),
+            "SELECT embedding, score FROM images WHERE session_id = ? AND label = ?",
+            (session_id, HUMAN_LABEL),
         ) as cur:
             rows = await cur.fetchall()
             return [(row[0], row[1]) for row in rows]
@@ -267,28 +323,26 @@ async def get_training_data(session_id: str) -> list[tuple[bytes, float]]:
 async def get_human_graded_images(session_id: str) -> list[dict[str, Any]]:
     """id/embedding/score for every human-graded image -- used to test the
     current regressor against manually-verified ground truth."""
-    placeholders = ", ".join("?" for _ in HUMAN_BUCKETS)
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            f"SELECT id, embedding, score FROM images WHERE session_id = ? AND label IN ({placeholders})",
-            (session_id, *HUMAN_BUCKETS),
+            "SELECT id, embedding, score FROM images WHERE session_id = ? AND label = ?",
+            (session_id, HUMAN_LABEL),
         ) as cur:
             rows = await cur.fetchall()
             return [dict(row) for row in rows]
 
 
-async def get_next_unreviewed_auto_image(session_id: str, auto_buckets: tuple[str, ...]) -> Optional[dict[str, Any]]:
+async def get_next_unreviewed_auto_image(session_id: str) -> Optional[dict[str, Any]]:
     """The oldest not-yet-reviewed auto-filed image. Once an image is
-    promoted its label changes to a human bucket, so it naturally drops out
-    of this query -- no separate "reviewed" flag needed."""
-    placeholders = ", ".join("?" for _ in auto_buckets)
+    promoted its label changes to 'human', so it naturally drops out of
+    this query -- no separate "reviewed" flag needed."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            f"SELECT * FROM images WHERE session_id = ? AND label IN ({placeholders}) "
+            "SELECT * FROM images WHERE session_id = ? AND label = ? "
             "AND local_path IS NOT NULL ORDER BY created_at ASC LIMIT 1",
-            (session_id, *auto_buckets),
+            (session_id, AUTO_LABEL),
         ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
@@ -302,10 +356,11 @@ async def get_images_for_session(
     sort: str = "newest",
     min_score: float = 0,
     max_score: float = 100,
+    domain: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Images actually persisted to disk for this session."""
     query = (
-        "SELECT id, label, score, image_url, local_path, created_at, graded_at FROM images "
+        "SELECT id, label, score, image_url, local_path, domain, created_at, graded_at FROM images "
         "WHERE session_id = ? AND local_path IS NOT NULL AND score BETWEEN ? AND ?"
     )
     params: list[Any] = [session_id, min_score, max_score]
@@ -313,6 +368,9 @@ async def get_images_for_session(
         placeholders = ", ".join("?" for _ in labels)
         query += f" AND label IN ({placeholders})"
         params.extend(labels)
+    if domain:
+        query += " AND domain = ?"
+        params.append(domain)
     order_clause = "score DESC, graded_at DESC" if sort == "rating" else "graded_at DESC"
     query += f" ORDER BY {order_clause}"
     if limit is not None:
@@ -330,6 +388,7 @@ async def count_images_for_session(
     labels: Optional[list[str]] = None,
     min_score: float = 0,
     max_score: float = 100,
+    domain: Optional[str] = None,
 ) -> int:
     query = "SELECT COUNT(*) FROM images WHERE session_id = ? AND local_path IS NOT NULL AND score BETWEEN ? AND ?"
     params: list[Any] = [session_id, min_score, max_score]
@@ -337,13 +396,17 @@ async def count_images_for_session(
         placeholders = ", ".join("?" for _ in labels)
         query += f" AND label IN ({placeholders})"
         params.extend(labels)
+    if domain:
+        query += " AND domain = ?"
+        params.append(domain)
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(query, params) as cur:
             (count,) = await cur.fetchone()
             return count
 
 
-async def get_bucket_counts(session_id: str) -> dict[str, int]:
+async def get_label_counts(session_id: str) -> dict[str, int]:
+    """Count of human-graded vs. auto-filed (pending review) images."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT label, COUNT(*) FROM images WHERE session_id = ? AND label IS NOT NULL GROUP BY label",
@@ -351,6 +414,43 @@ async def get_bucket_counts(session_id: str) -> dict[str, int]:
         ) as cur:
             rows = await cur.fetchall()
             return {label: count for label, count in rows}
+
+
+async def get_score_histogram(session_id: str) -> dict[str, list[int]]:
+    """Counts images (per label: human/auto) into SCORE_HISTOGRAM_BINS
+    equal-width bins spanning 0-100, for the gallery's score-distribution
+    bar. Always returns a full-length list per label (zero-filled), so the
+    frontend doesn't need to know which bins are empty."""
+    bin_width = 100 / SCORE_HISTOGRAM_BINS
+    result = {HUMAN_LABEL: [0] * SCORE_HISTOGRAM_BINS, AUTO_LABEL: [0] * SCORE_HISTOGRAM_BINS}
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT label, MIN(?, CAST(score / ? AS INTEGER)) AS bin, COUNT(*) FROM images "
+            "WHERE session_id = ? AND score IS NOT NULL AND label IN (?, ?) "
+            "GROUP BY label, bin",
+            (SCORE_HISTOGRAM_BINS - 1, bin_width, session_id, HUMAN_LABEL, AUTO_LABEL),
+        ) as cur:
+            rows = await cur.fetchall()
+    for label, bin_index, count in rows:
+        result[label][bin_index] = count
+    return result
+
+
+async def get_site_stats(session_id: str) -> list[dict[str, Any]]:
+    """Average score and image count per source website (not page) for this
+    session -- purely informational for now, doesn't feed back into
+    crawling behavior. Computed on the fly from `images` rather than kept
+    as a running aggregate, so it can never drift out of sync with grades,
+    promotions, or deletions."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT domain, AVG(score), COUNT(*) FROM images "
+            "WHERE session_id = ? AND score IS NOT NULL AND domain IS NOT NULL "
+            "GROUP BY domain ORDER BY AVG(score) DESC",
+            (session_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+    return [{"domain": domain, "average_score": avg_score, "image_count": count} for domain, avg_score, count in rows]
 
 
 async def get_source_credentials(site: str) -> Optional[dict[str, Any]]:
