@@ -94,7 +94,8 @@ label {
 
 textarea,
 select,
-input[type="text"] {
+input[type="text"],
+input[type="password"] {
   background: #16171b;
   color: #e8e8ea;
   border: 1px solid #3a3d46;
@@ -109,7 +110,8 @@ textarea {
 }
 
 select,
-input[type="text"] {
+input[type="text"],
+input[type="password"] {
   font-size: 0.95rem;
 }
 
@@ -162,6 +164,41 @@ button.danger:hover:not(:disabled) {
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
+}
+
+#scrape-config {
+  margin-top: 0.85rem;
+}
+
+#scrape-config label {
+  margin-bottom: 0.3rem;
+}
+
+#save-threshold-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+#save-threshold-row input[type="range"] {
+  flex: 1;
+  accent-color: #3b6fd8;
+}
+
+#save-threshold-value {
+  min-width: 2.5em;
+  text-align: right;
+}
+
+#save-threshold-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.8rem;
+  color: #a5a8b0;
+}
+
+#save-threshold-row input[type="range"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 #test-regressor-status {
@@ -334,6 +371,15 @@ button.danger:hover:not(:disabled) {
   font-size: 1.1rem;
 }
 
+#grading-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+#grading-actions #submit-score-btn {
+  flex: 1;
+}
+
 #unsupervised-note {
   color: #a5a8b0;
   font-style: italic;
@@ -434,27 +480,55 @@ button.danger:hover:not(:disabled) {
   background: transparent;
 }
 
+/* Each thumb is a half-circle (width = height/2, corner radius = height/2)
+   so that when the two knobs meet, their flat edges line up into one full
+   circle with a seam down the middle -- the min knob is the left half
+   (rounded left, flat right), the max knob is the right half (mirrored). */
 .dual-slider input[type="range"]::-webkit-slider-thumb {
   pointer-events: auto;
   -webkit-appearance: none;
   appearance: none;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
+  width: 8px;
+  height: 16px;
   background: #3b6fd8;
   border: 2px solid #16171b;
   cursor: pointer;
-  margin-top: 3px;
+  margin-top: 2px;
+}
+
+/* The browser centers the thumb's whole box on the value position, which
+   for a symmetric circle puts the right point on the track -- but for a
+   half-circle that leaves the FLAT edge offset from the value by half the
+   width. Shifting each thumb by half its width moves the flat edge back
+   onto the value position instead, so two thumbs at equal values actually
+   touch and read as one seamed circle rather than sitting 8px apart. */
+#gallery-score-filter-min::-webkit-slider-thumb {
+  border-radius: 8px 0 0 8px;
+  transform: translateX(-4px);
+}
+
+#gallery-score-filter-max::-webkit-slider-thumb {
+  border-radius: 0 8px 8px 0;
+  transform: translateX(4px);
 }
 
 .dual-slider input[type="range"]::-moz-range-thumb {
   pointer-events: auto;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
+  width: 8px;
+  height: 16px;
   background: #3b6fd8;
   border: 2px solid #16171b;
   cursor: pointer;
+}
+
+#gallery-score-filter-min::-moz-range-thumb {
+  border-radius: 8px 0 0 8px;
+  transform: translateX(-4px);
+}
+
+#gallery-score-filter-max::-moz-range-thumb {
+  border-radius: 0 8px 8px 0;
+  transform: translateX(4px);
 }
 
 #gallery-sort {
