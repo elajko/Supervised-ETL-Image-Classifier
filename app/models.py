@@ -11,6 +11,7 @@ class CrawlStartRequest(BaseModel):
     session_id: str
     seed_urls: list[str]
     mode: Mode
+    save_threshold: Score = Field(ge=0, le=100, default=0)
 
 
 class CrawlStopRequest(BaseModel):
@@ -33,6 +34,7 @@ class CrawlStatusResponse(BaseModel):
     current_url: Optional[str]
     bucket_counts: dict[str, int]
     last_error: Optional[str] = None
+    save_threshold: float = 0
 
 
 class Prediction(BaseModel):

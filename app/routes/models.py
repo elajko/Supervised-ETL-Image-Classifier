@@ -105,3 +105,12 @@ async def promote_image(session_id: str, req: PromoteImageRequest) -> GradeRespo
     except KeyError:
         raise HTTPException(status_code=404, detail="unknown model or image")
     return GradeResponse(**result)
+
+
+@router.delete("/{session_id}/images/{image_id}", response_model=GradeResponse)
+async def delete_image(session_id: str, image_id: str) -> GradeResponse:
+    try:
+        result = await session_manager.delete_image(session_id, image_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="unknown model or image")
+    return GradeResponse(**result)

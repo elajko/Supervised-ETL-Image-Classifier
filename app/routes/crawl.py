@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api/crawl")
 @router.post("/start")
 async def start_crawl(req: CrawlStartRequest) -> dict:
     try:
-        await session_manager.start_crawl(req.session_id, req.seed_urls, req.mode)
+        await session_manager.start_crawl(req.session_id, req.seed_urls, req.mode, req.save_threshold)
     except KeyError:
         raise HTTPException(status_code=404, detail="unknown model")
     return {"status": "crawling"}

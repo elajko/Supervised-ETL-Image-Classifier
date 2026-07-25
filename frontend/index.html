@@ -39,6 +39,15 @@
     <label for="url-input">Seed URLs (one per line)</label>
     <textarea id="url-input" rows="6" placeholder="https://example.com/gallery&#10;https://example.com/other-page"></textarea>
 
+    <div id="scrape-config">
+      <label for="save-threshold-slider">Save threshold</label>
+      <div id="save-threshold-row">
+        <input type="range" id="save-threshold-slider" min="0" max="100" step="1" value="0">
+        <strong id="save-threshold-value">0</strong>
+      </div>
+      <p id="save-threshold-hint">Only images the model predicts above this score are saved to disk &mdash; everything is still hashed for de-duplication either way.</p>
+    </div>
+
     <div id="start-control">
       <button id="start-btn" class="primary">Start crawling</button>
       <div id="mode-menu" class="hidden">
@@ -127,7 +136,10 @@
       <span id="score-slider-label-high">Predominantly this</span>
       <strong id="score-slider-value">50</strong>
     </div>
-    <button id="submit-score-btn" class="primary">Submit rating</button>
+    <div id="grading-actions">
+      <button id="submit-score-btn" class="primary">Submit rating</button>
+      <button id="delete-image-btn" class="danger hidden" title="Delete this image">&#128465;&#65039; Delete</button>
+    </div>
   </section>
   <p id="right-pane-placeholder">No image being graded right now.</p>
 </div>

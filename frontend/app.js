@@ -25,6 +25,8 @@ const testRegressorStatus = document.getElementById('test-regressor-status');
 const reviewAutoBtn = document.getElementById('review-auto-btn');
 const sourceSetupPanel = document.getElementById('source-setup-panel');
 const sourceSetupList = document.getElementById('source-setup-list');
+const saveThresholdSlider = document.getElementById('save-threshold-slider');
+const saveThresholdValue = document.getElementById('save-threshold-value');
 
 const statusMode = document.getElementById('status-mode');
 const statusStatus = document.getElementById('status-status');
@@ -45,6 +47,7 @@ const judgementText = document.getElementById('judgement-text');
 const scoreSlider = document.getElementById('score-slider');
 const scoreSliderValue = document.getElementById('score-slider-value');
 const submitScoreBtn = document.getElementById('submit-score-btn');
+const deleteImageBtn = document.getElementById('delete-image-btn');
 const unsupervisedNote = document.getElementById('unsupervised-note');
 
 const gallerySection = document.getElementById('gallery-section');
@@ -266,6 +269,7 @@ async function selectModel(id) {
   if (!resp.ok) return;
   const status = await resp.json();
   mode = status.mode;
+  setSaveThresholdValue(status.save_threshold);
 
   if (status.status === 'crawling') {
     setupSection.classList.add('hidden');
@@ -474,6 +478,43 @@ submitScoreBtn.addEventListener('click', () => {
   }
 });
 
+saveThresholdSlider.addEventListener('input', () => {
+  saveThresholdValue.textContent = saveThresholdSlider.value;
+});
+
+function setSaveThresholdValue(value) {
+  const rounded = Math.round(value);
+  saveThresholdSlider.value = rounded;
+  saveThresholdValue.textContent = rounded;
+}
+
+deleteImageBtn.addEventListener('click', (e) => {
+  if (!manualReclassifying || !manualImageId) return;
+  if (!e.shiftKey) {
+    const confirmed = confirm(
+      'Confirm deleting this image? You can skip this pop-up by holding shift when pressing the delete button.'
+    );
+    if (!confirmed) return;
+  }
+  deleteCurrentManualImage();
+});
+
+async function deleteCurrentManualImage() {
+  if (!manualImageId || !currentModelId) return;
+  const imageId = manualImageId;
+  setScoreControlsEnabled(false);
+  await fetch(`/api/models/${encodeURIComponent(currentModelId)}/images/${encodeURIComponent(imageId)}`, {
+    method: 'DELETE',
+  });
+  manualReclassifying = false;
+  manualImageId = null;
+  updateGradingSectionVisibility();
+  galleryOffset = 0;
+  await refreshGallery();
+  await refreshModelList();
+  if (currentModelId) modelSelect.value = currentModelId;
+}
+
 async function startCrawl(chosenMode) {
   if (!currentModelId) return;
   const seedUrls = parseUrls();
@@ -489,7 +530,12 @@ async function startCrawl(chosenMode) {
   const resp = await fetch('/api/crawl/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: currentModelId, seed_urls: seedUrls, mode: chosenMode }),
+    body: JSON.stringify({
+      session_id: currentModelId,
+      seed_urls: seedUrls,
+      mode: chosenMode,
+      save_threshold: Number(saveThresholdSlider.value),
+    }),
   });
   if (!resp.ok) {
     setupError.textContent = 'Failed to start crawl.';
@@ -558,13 +604,20 @@ function updateGradingSectionVisibility() {
   const active = showForCrawl || reviewingAuto || manualReclassifying;
   gradingSection.classList.toggle('hidden', !active);
   rightPanePlaceholder.classList.toggle('hidden', active);
+  // Deleting only makes sense for an already-saved image being manually
+  // reclassified from the gallery -- not a live-crawl image still pending
+  // its first grade, nor an auto-filed image mid-review.
+  deleteImageBtn.classList.toggle('hidden', !manualReclassifying);
 }
 
 // Reclassifying a gallery image from the gallery itself is only safe while
 // the crawler isn't actively running, to avoid racing with the live-crawl
-// grading flow that also drives the same right-pane controls.
+// grading flow that also drives the same right-pane controls. The save
+// threshold is likewise locked while running since it's read once at crawl
+// start and only takes effect for a fresh run.
 function updateGalleryLockState() {
   galleryGrid.classList.toggle('locked', running);
+  saveThresholdSlider.disabled = running;
 }
 
 function applyModeToUI() {
@@ -743,6 +796,7 @@ async function refreshStatus() {
   statusGraded.textContent = s.images_graded;
   statusAuto.textContent = s.images_auto_filed;
   statusCurrentUrl.textContent = s.current_url || '';
+  setSaveThresholdValue(s.save_threshold);
   classCounts.innerHTML = Object.entries(s.bucket_counts)
     .map(([label, count]) => `<span class="class-count">${label}: ${count}</span>`)
     .join(' ');
@@ -847,6 +901,7 @@ function renderJudgement(score, leadIn) {
 function setScoreControlsEnabled(enabled) {
   scoreSlider.disabled = !enabled;
   submitScoreBtn.disabled = !enabled;
+  deleteImageBtn.disabled = !enabled;
 }
 
 async function gradeCurrentImage(score) {

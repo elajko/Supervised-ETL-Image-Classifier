@@ -90,6 +90,14 @@ async def init_db() -> None:
         if "score" not in image_cols:
             await db.execute("ALTER TABLE images ADD COLUMN score REAL")
             await db.commit()
+        # Migration guard: any pre-existing local data/app.db predates the
+        # `save_threshold` column. Defaults to 0 (SCORE_MIN), which saves
+        # everything -- matches the previous, always-save behavior.
+        async with db.execute("PRAGMA table_info(sessions)") as cur:
+            session_cols = [row[1] for row in await cur.fetchall()]
+        if "save_threshold" not in session_cols:
+            await db.execute("ALTER TABLE sessions ADD COLUMN save_threshold REAL NOT NULL DEFAULT 0")
+            await db.commit()
 
 
 async def create_session(name: str) -> str:
@@ -105,12 +113,12 @@ async def create_session(name: str) -> str:
     return session_id
 
 
-async def start_crawl_run(session_id: str, seed_urls: list[str], mode: str) -> None:
+async def start_crawl_run(session_id: str, seed_urls: list[str], mode: str, save_threshold: float = 0) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE sessions SET seed_urls = ?, mode = ?, status = 'crawling', "
+            "UPDATE sessions SET seed_urls = ?, mode = ?, status = 'crawling', save_threshold = ?, "
             "pages_visited = 0, images_found = 0, current_url = NULL, updated_at = ? WHERE id = ?",
-            (json.dumps(seed_urls), mode, _now(), session_id),
+            (json.dumps(seed_urls), mode, save_threshold, _now(), session_id),
         )
         await db.commit()
 
@@ -234,6 +242,12 @@ async def get_image(image_id: str) -> Optional[dict[str, Any]]:
         async with db.execute("SELECT * FROM images WHERE id = ?", (image_id,)) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
+
+
+async def delete_image(image_id: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM images WHERE id = ?", (image_id,))
+        await db.commit()
 
 
 async def get_training_data(session_id: str) -> list[tuple[bytes, float]]:

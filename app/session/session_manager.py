@@ -16,8 +16,13 @@ from app.storage.paths import model_path
 
 
 class SessionState:
-    def __init__(self, mode: str) -> None:
+    def __init__(self, mode: str, save_threshold: float = 0) -> None:
         self.mode = mode
+        # Only images the current regressor predicts above this score get
+        # persisted to disk; everything still gets hashed into dedup_index
+        # regardless, so a below-threshold image won't be re-fetched and
+        # re-scored on a future crawl of the same pages.
+        self.save_threshold = save_threshold
         self.regressor = ScoreRegressor()
         # Populated in _get_or_create_state, which knows this session's
         # already-seen content hashes; empty here since building it needs a
@@ -58,7 +63,7 @@ class SessionManager:
         row = await db.get_session(session_id)
         if row is None:
             raise KeyError(f"unknown session {session_id!r}")
-        state = SessionState(row["mode"])
+        state = SessionState(row["mode"], row["save_threshold"])
         state.regressor.load(model_path(session_id))
         existing_hashes = await db.get_content_hashes(session_id)
         state.dedup_index = ContentHashIndex(existing_hashes)
@@ -146,15 +151,16 @@ class SessionManager:
             )
         return results
 
-    async def start_crawl(self, session_id: str, seed_urls: list[str], mode: str) -> None:
+    async def start_crawl(self, session_id: str, seed_urls: list[str], mode: str, save_threshold: float = 0) -> None:
         if await db.get_session(session_id) is None:
             raise KeyError(f"unknown session {session_id!r}")
         state = await self._get_or_create_state(session_id)
         await self._stop_existing_crawl(state)
         state.mode = mode
+        state.save_threshold = save_threshold
         state.stop_event = asyncio.Event()
         state.last_error = None
-        await db.start_crawl_run(session_id, seed_urls, mode)
+        await db.start_crawl_run(session_id, seed_urls, mode, save_threshold)
 
         async def is_duplicate(content_hash: str) -> bool:
             # In-memory bloom filter + sorted-list check (see ContentHashIndex) —
@@ -195,12 +201,23 @@ class SessionManager:
                 serialize_embedding(crawled.embedding),
                 EMBEDDING_MODEL_ID,
             )
+            # Always hashed into the dedup index and given a DB row (which is
+            # what the index gets rebuilt from on restart) regardless of the
+            # save-threshold decision below -- a filtered-out image still
+            # shouldn't be re-fetched and re-scored on a future crawl.
             state.dedup_index.add(crawled.content_hash)
+
+            predicted = state.regressor.predict_score(crawled.embedding)
+            # No prediction means an untrained regressor -- always save in
+            # that case, since filtering everything out before any grading
+            # exists would leave nothing to bootstrap training with.
+            if predicted is not None and predicted < state.save_threshold:
+                return
+
             if state.mode == "supervised":
                 state.pending_bytes[image_id] = crawled.image_bytes
                 await state.pending_queue.put(image_id)
             else:
-                predicted = state.regressor.predict_score(crawled.embedding)
                 score = predicted if predicted is not None else 0.0
                 label = to_auto_bucket(score_to_bucket(score))
                 local_path = persist_graded_image(session_id, crawled.content_hash, crawled.image_bytes, label)
@@ -235,6 +252,7 @@ class SessionManager:
             "current_url": session_row["current_url"],
             "bucket_counts": bucket_counts,
             "last_error": state.last_error,
+            "save_threshold": session_row["save_threshold"],
         }
 
     async def get_next_image(self, session_id: str, timeout: float = NEXT_IMAGE_LONG_POLL_TIMEOUT) -> Optional[dict]:
@@ -304,6 +322,27 @@ class SessionManager:
         old_path = Path(row["local_path"]) if row["local_path"] else None
         new_path = move_graded_image(session_id, row["content_hash"], old_path, bucket)
         await db.set_image_grade(image_id, bucket, score, new_path)
+
+        return await self._retrain_and_summarize(session_id, state)
+
+    async def delete_image(self, session_id: str, image_id: str) -> dict:
+        """Removes an image's file (if any) and DB row entirely. Retrains,
+        since a deleted image may have been part of the training set. Note
+        this doesn't retroactively un-hash the image from the in-memory
+        dedup index (bloom filters can't remove entries) -- it'll be dropped
+        from the index on the next server restart, once the DB row it's
+        rebuilt from is gone."""
+        state = await self._get_or_create_state(session_id)
+        row = await db.get_image(image_id)
+        if row is None or row["session_id"] != session_id:
+            raise KeyError(f"unknown image {image_id!r}")
+
+        if row["local_path"]:
+            path = Path(row["local_path"])
+            if path.exists():
+                path.unlink()
+        state.pending_bytes.pop(image_id, None)
+        await db.delete_image(image_id)
 
         return await self._retrain_and_summarize(session_id, state)
 
